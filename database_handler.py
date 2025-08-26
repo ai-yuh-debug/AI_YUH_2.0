@@ -17,7 +17,6 @@
 import os
 from supabase import create_client, Client
 
-# ... (Configuração do Cliente Supabase como antes) ...
 DB_ENABLED = False
 supabase_client: Client = None
 
@@ -31,7 +30,6 @@ try:
     DB_ENABLED = True
 except Exception as e:
     print(f"ERRO CRÍTICO: Não foi possível conectar ao Supabase. Erro: {e}")
-
 
 def load_initial_data():
     if not DB_ENABLED: return None, []
@@ -49,7 +47,6 @@ def load_initial_data():
         return None, []
 
 def get_user_permission(username: str) -> str:
-    # ... (código inalterado) ...
     if not DB_ENABLED: return 'normal'
     try:
         user_response = supabase_client.table('users').select("permission_level").eq("twitch_username", username.lower()).execute()
@@ -60,9 +57,7 @@ def get_user_permission(username: str) -> str:
         print(f"Erro ao verificar permissão para {username}: {e}")
         return 'normal'
 
-
 def add_lorebook_entry(entry: str, user: str) -> bool:
-    # ... (código inalterado) ...
     if not DB_ENABLED: return False
     try:
         response = supabase_client.table('lorebook').insert({"entry": entry, "created_by": user}).execute()
@@ -74,13 +69,10 @@ def add_lorebook_entry(entry: str, user: str) -> bool:
         print(f"Erro ao adicionar entrada no lorebook: {e}")
         return False
 
-# --- NOVAS FUNÇÕES DA FASE 6 ---
-
 def save_long_term_memory(username: str, summary: str):
     """Salva um resumo de conversa na tabela de memória de longo prazo."""
     if not DB_ENABLED: return
     try:
-        # Por enquanto, não geramos o 'embedding', então o inserimos como nulo.
         supabase_client.table('long_term_memory').insert({
             "username": username,
             "summary": summary,
