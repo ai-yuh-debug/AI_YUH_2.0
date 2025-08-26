@@ -1,4 +1,14 @@
-python-dotenv
-google-generativeai
-supabase
-ddgs
+annotated-types==0.7.0
+certifi==2024.7.4
+charset-normalizer==3.3.2
+click==8.1.7
+colorama==0.4.6
+ddgs==6.1.5
+google-ai-generativelanguage==0.6.15
+google-api-core==2.25.1
+...
+google-generativeai==0.10.0  # <--- A versão correta!
+...
+supabase==2.5.0
+...
+# E muitas outras dependências...
