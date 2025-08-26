@@ -3,106 +3,139 @@
 # =========================================================================================
 #                   AI_YUH - Twitch Bot com Memória Generativa
 # =========================================================================================
-# FASE 1: O Esqueleto do Bot - Conexão e Comunicação Básica
+# FASE 1 (Revisada): Conexão Direta com IRC (Apenas OAuth)
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.0.0
+# Versão: 1.1.0
 # Data: 26/08/2025
 #
-# Descrição: Este é o script principal para o bot da Twitch, AI_Yuh.
-#            Nesta primeira fase, o foco é estabelecer a conexão com a Twitch,
-#            carregar configurações de forma segura e responder a um comando básico
-#            para verificar a funcionalidade. Este código é a base para a
-#            implantação futura no Render.
+# Descrição: Esta versão do bot atende ao requisito de usar APENAS o token OAuth
+#            para autenticação, sem a necessidade de um Client ID. Para isso,
+#            abandonamos a biblioteca twitchio e usamos a biblioteca nativa 'socket'
+#            para nos comunicarmos diretamente com o servidor IRC da Twitch.
 #
 # =========================================================================================
 
 import os
-from twitchio.ext import commands
+import socket
+import time
 from dotenv import load_dotenv
 
 # Carrega as variáveis de ambiente do arquivo .env
-# Isso mantém suas credenciais seguras e fora do código-fonte.
-# O Render usará suas próprias variáveis de ambiente, mas este método é perfeito para desenvolvimento local.
 load_dotenv()
 
-class Bot(commands.Bot):
+# --- Configurações Carregadas do .env ---
+TTV_TOKEN = os.getenv('TTV_TOKEN')
+BOT_NICK = os.getenv('BOT_NICK')
+TTV_CHANNEL = os.getenv('TTV_CHANNEL')
+BOT_PREFIX = os.getenv('BOT_PREFIX')
 
-    def __init__(self):
-        # Inicializa a classe do Bot com as credenciais e informações do canal
-        # Essas informações são carregadas do arquivo .env
-        super().__init__(
-            token=os.getenv('TTV_TOKEN'),
-            client_id=os.getenv('TTV_CLIENT_ID'),
-            nick=os.getenv('BOT_NICK'),
-            prefix=os.getenv('BOT_PREFIX'),
-            initial_channels=[os.getenv('TTV_CHANNEL')]
-        )
-        print("Inicializando o bot...")
+# --- Constantes do Servidor IRC da Twitch ---
+HOST = "irc.chat.twitch.tv"
+PORT = 6667
 
-    async def event_ready(self):
-        """
-        Esta função é chamada quando o bot se conecta com sucesso à Twitch.
-        É um ótimo lugar para imprimir mensagens de status ou enviar uma
-        mensagem de "olá" para o canal.
-        """
-        # Acessa o canal a partir da lista de canais conectados
-        channel_name = os.getenv('TTV_CHANNEL')
-        print(f'Bot conectado como {self.nick}')
-        print(f'Entrando no canal: {channel_name}')
+# --- Função Principal de Execução ---
+
+def main():
+    """Função principal que conecta e executa o bot."""
+    # Validação das variáveis de ambiente essenciais
+    required_vars = ['TTV_TOKEN', 'BOT_NICK', 'TTV_CHANNEL']
+    if any(not var for var in [TTV_TOKEN, BOT_NICK, TTV_CHANNEL]):
+        print("Erro: Verifique se TTV_TOKEN, BOT_NICK, e TTV_CHANNEL estão definidos no arquivo .env")
+        return
+
+    # Criação e configuração do socket
+    sock = socket.socket()
+    try:
+        print("Conectando ao servidor IRC da Twitch...")
+        sock.connect((HOST, PORT))
+        print("Conectado. Autenticando...")
+
+        # Envio de dados de autenticação (APENAS Nick e OAuth)
+        sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
+        sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
+        sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
         
-        # Obtém o objeto do canal para enviar mensagens
-        channel = self.get_channel(channel_name)
-        if channel:
-            await channel.send(f"/me Olá! AI_Yuh está online e pronta para interagir.")
-        else:
-            print(f"Erro: Não foi possível encontrar o canal {channel_name}.")
+        print(f"Autenticação enviada. Entrando no canal #{TTV_CHANNEL}")
+        
+        # Envia uma mensagem de "Olá" para o chat
+        send_chat_message(sock, f"Olá! AI_Yuh (v1.1.0) está online.")
+        
+        # Loop principal para escutar o chat
+        listen_for_messages(sock)
 
-    async def event_message(self, message):
-        """
-        Esta função é chamada para cada mensagem enviada no chat.
-        É aqui que o bot "escuta" tudo.
-        """
-        # Ignora mensagens enviadas pelo próprio bot para evitar loops infinitos
-        if message.echo:
-            return
+    except Exception as e:
+        print(f"Ocorreu um erro: {e}")
+    finally:
+        print("Fechando a conexão.")
+        sock.close()
 
-        # Imprime a mensagem no console para fins de depuração
-        print(f"({message.timestamp.strftime('%H:%M:%S')}) {message.author.name}: {message.content}")
+def send_chat_message(sock, message):
+    """Envia uma mensagem formatada para o chat da Twitch."""
+    try:
+        print(f"ENVIANDO: {message}")
+        sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
+    except Exception as e:
+        print(f"Erro ao enviar mensagem: {e}")
 
-        # Processa os comandos definidos com @commands.command()
-        await self.handle_commands(message)
+def listen_for_messages(sock):
+    """Loop principal que lê e processa as mensagens do servidor IRC."""
+    while True:
+        try:
+            # Lê dados do buffer do socket
+            resp = sock.recv(2048).decode('utf-8')
 
-    # =========================================================================================
-    #                                 COMANDOS BÁSICOS
-    # =========================================================================================
+            # Se a resposta estiver vazia, a conexão pode ter caído
+            if not resp:
+                print("Conexão perdida. Tentando reconectar...")
+                # Lógica de reconexão pode ser adicionada aqui
+                break
 
-    @commands.command(name='ping')
-    async def ping_command(self, ctx: commands.Context):
-        """
-        Comando de teste simples.
-        Quando um usuário digita !ping, o bot responde com "Pong!".
-        Isso serve para verificar se o bot está online e respondendo a comandos.
-        """
-        await ctx.send(f'Pong, @{ctx.author.name}!')
+            # A Twitch exige que respondamos a PINGs para manter a conexão ativa
+            if resp.startswith('PING'):
+                print("PING recebido, enviando PONG...")
+                sock.send("PONG\n".encode('utf-8'))
+                continue
+            
+            # Se não for um PING, processa como uma mensagem normal
+            process_message(sock, resp)
+
+        except ConnectionResetError:
+            print("Conexão foi resetada pelo servidor. Reconectando...")
+            # Lógica de reconexão
+            break
+        except Exception as e:
+            print(f"Erro no loop de escuta: {e}")
+            time.sleep(5) # Espera um pouco antes de continuar
+
+def process_message(sock, raw_message):
+    """Decodifica uma mensagem bruta do IRC e aciona comandos."""
+    # Imprime a mensagem bruta para depuração
+    print(f"RECEBIDO: {raw_message.strip()}")
+
+    # Estrutura de uma mensagem de chat no IRC da Twitch:
+    # :<user>!<user>@<user>.tmi.twitch.tv PRIVMSG #<channel> :<message>
+    if "PRIVMSG" in raw_message:
+        parts = raw_message.split("PRIVMSG")
+        
+        # Extrai o nome de usuário
+        user_info = parts[0].split('!')[0][1:]
+        
+        # Extrai o conteúdo da mensagem
+        message_content = parts[1].split(':', 1)[1].strip()
+
+        print(f"CHAT | {user_info}: {message_content}")
+
+        # --- Lógica de Comandos ---
+        if message_content.startswith(BOT_PREFIX):
+            command_parts = message_content[len(BOT_PREFIX):].split()
+            command_name = command_parts[0].lower()
+
+            if command_name == "ping":
+                send_chat_message(sock, f"Pong, @{user_info}!")
 
 # =========================================================================================
 #                               PONTO DE ENTRADA DO SCRIPT
 # =========================================================================================
-
-def main():
-    """Função principal para rodar o bot."""
-    # Validação das variáveis de ambiente essenciais
-    required_vars = ['TTV_TOKEN', 'TTV_CLIENT_ID', 'BOT_NICK', 'TTV_CHANNEL']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    if missing_vars:
-        print(f"Erro: As seguintes variáveis de ambiente estão faltando no seu arquivo .env: {', '.join(missing_vars)}")
-        return
-
-    # Cria uma instância da nossa classe Bot
-    bot = Bot()
-    # Inicia a execução do bot (este método bloqueia a execução até o bot parar)
-    bot.run()
-
 if __name__ == "__main__":
     main()
