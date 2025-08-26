@@ -17,7 +17,7 @@
 
 import os
 import google.generativeai as genai
-from google.generativeai.types import Tool # IMPORTANTE: Nova importação
+from google.generativeai.types import Tool # CONFIRMADO PELA DOCUMENTAÇÃO
 from ddgs import DDGS
 
 GEMINI_ENABLED = False
@@ -30,7 +30,9 @@ try:
     summarizer_model = genai.GenerativeModel(model_name="gemini-1.5-flash")
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        # ... (outras configurações de segurança)
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
     ]
     print("Módulo Gemini inicializado.")
     GEMINI_ENABLED = True
@@ -42,12 +44,10 @@ def load_interaction_model(model_name: str, use_native_search: bool):
     global interaction_model
     try:
         tools = None
-        # --- CORREÇÃO: Usa a nova sintaxe para configurar a ferramenta de busca ---
+        # CONFIRMADO PELA DOCUMENTAÇÃO: Usa a nova sintaxe para configurar a ferramenta de busca
         if use_native_search:
-            # Cria um objeto de configuração para a ferramenta Google Search
             google_search_tool = Tool.from_google_search_retrieval({})
             tools = [google_search_tool]
-        # --------------------------------------------------------------------------
         
         interaction_model = genai.GenerativeModel(
             model_name=model_name, 
