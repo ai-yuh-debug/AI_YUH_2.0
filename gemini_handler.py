@@ -6,17 +6,18 @@
 # FASE 6: O Ciclo Completo da Memória e Busca na Web (HÍBRIDO)
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.5.0 (Busca Híbrida e Configurável)
+# Versão: 1.5.1 (Sintaxe de Ferramentas da API Corrigida)
 # Data: 26/08/2025
 #
-# Descrição: Implementa um sistema de busca híbrido. O bot pode usar a busca
-#            nativa do Google ou um fallback para DDGS, baseado em uma
-#            configuração carregada do banco de dados.
+# Descrição: Corrige a inicialização do modelo Gemini para usar a nova sintaxe
+#            de configuração de ferramentas, conforme a documentação mais recente
+#            da API python-genai.
 #
 # =========================================================================================
 
 import os
 import google.generativeai as genai
+from google.generativeai.types import Tool # IMPORTANTE: Nova importação
 from ddgs import DDGS
 
 GEMINI_ENABLED = False
@@ -37,10 +38,16 @@ except Exception as e:
     print(f"ERRO CRÍTICO: Não foi possível inicializar o módulo Gemini. Erro: {e}")
 
 def load_interaction_model(model_name: str, use_native_search: bool):
-    """Carrega o modelo de IA, ativando a busca nativa apenas se configurado."""
+    """Carrega o modelo de IA, ativando a busca nativa com a sintaxe correta."""
     global interaction_model
     try:
-        tools = ['google_search'] if use_native_search else None
+        tools = None
+        # --- CORREÇÃO: Usa a nova sintaxe para configurar a ferramenta de busca ---
+        if use_native_search:
+            # Cria um objeto de configuração para a ferramenta Google Search
+            google_search_tool = Tool.from_google_search_retrieval({})
+            tools = [google_search_tool]
+        # --------------------------------------------------------------------------
         
         interaction_model = genai.GenerativeModel(
             model_name=model_name, 
@@ -74,20 +81,16 @@ def generate_response(question: str, history: list, settings: dict, lorebook: li
         return "Desculpe, meu cérebro de interação está offline."
 
     try:
-        # --- LÓGICA DE DECISÃO DE BUSCA ---
         use_native_search = settings.get('use_native_google_search', True)
         web_context = ""
 
-        # Se a busca nativa NÃO estiver ativa, usamos o fallback
         if not use_native_search:
             web_context = web_search_fallback(question)
         
-        # --- Construção do Prompt ---
         full_prompt = []
         full_prompt.append({'role': 'user', 'parts': [settings.get('personality_prompt', '')]})
         full_prompt.append({'role': 'model', 'parts': ["Entendido. Assumirei essa personalidade."]})
         
-        # ... (Lógica do lorebook e memórias de longo prazo inalterada) ...
         if lorebook:
             lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
             full_prompt.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
@@ -97,7 +100,6 @@ def generate_response(question: str, history: list, settings: dict, lorebook: li
             full_prompt.append({'role': 'user', 'parts': [f"Para referência, aqui estão alguns resumos de suas conversas passadas comigo:\n{memories_text}"]})
             full_prompt.append({'role': 'model', 'parts': ["Ok, vou considerar essas memórias."]})
         
-        # Adiciona o contexto da web apenas se estivermos usando o fallback
         if web_context:
             full_prompt.append({'role': 'user', 'parts': [f"Para te ajudar a responder, aqui está um contexto atualizado da internet:\n{web_context}"]})
             full_prompt.append({'role': 'model', 'parts': ["Obrigado pelo contexto da web."]})
@@ -115,7 +117,6 @@ def generate_response(question: str, history: list, settings: dict, lorebook: li
         return "Ocorreu um erro enquanto eu pensava."
 
 def summarize_conversation(conversation_history: list) -> str:
-    # Inalterado
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Módulo de sumarização indisponível."
     try:
         transcript = "\n".join(f"{msg['role']}: {msg['parts'][0]}" for msg in conversation_history)
