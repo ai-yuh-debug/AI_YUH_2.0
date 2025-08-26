@@ -3,14 +3,14 @@
 # =========================================================================================
 #                   AI_YUH - Twitch Bot com Memória Generativa
 # =========================================================================================
-# FASE 2: Integração com a IA de Interação
+# FASE 3: Integração com o Banco de Dados
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.3.0
+# Versão: 1.4.0
 # Data: 26/08/2025
 #
-# Descrição: O bot agora se conecta ao módulo gemini_handler para gerar respostas
-#            inteligentes. A lógica de ativação (!ask e menção) agora aciona a IA.
+# Descrição: O bot agora se conecta aos módulos de IA e de Banco de Dados na
+#            inicialização, preparando o terreno para funcionalidades de memória.
 #
 # =========================================================================================
 
@@ -22,8 +22,9 @@ from dotenv import load_dotenv
 # Carrega as variáveis de ambiente PRIMEIRO
 load_dotenv()
 
-# AGORA importa o nosso módulo Gemini, que depende do .env
+# AGORA importa nossos módulos, que dependem do .env
 import gemini_handler
+import database_handler # Novo módulo importado
 
 # --- Configurações Carregadas do .env ---
 TTV_TOKEN = os.getenv('TTV_TOKEN')
@@ -38,9 +39,19 @@ PORT = 6667
 
 def main():
     """Função principal que conecta e executa o bot."""
-    required_vars = ['TTV_TOKEN', 'BOT_NICK', 'TTV_CHANNEL', 'GEMINI_API_KEY']
-    if any(not os.getenv(var) for var in required_vars):
-        print("ERRO: Verifique se todas as variáveis estão definidas no .env: TTV_TOKEN, BOT_NICK, TTV_CHANNEL, GEMINI_API_KEY")
+    # Variáveis de ambiente agora incluem as do Supabase
+    required_vars = [
+        'TTV_TOKEN', 'BOT_NICK', 'TTV_CHANNEL', 
+        'GEMINI_API_KEY', 'SUPABASE_URL', 'SUPABASE_KEY'
+    ]
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        print(f"ERRO: As seguintes variáveis de ambiente estão faltando no .env: {', '.join(missing_vars)}")
+        return
+    
+    # Verifica se os módulos essenciais carregaram corretamente
+    if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED:
+        print("O bot não pode iniciar devido a um erro na inicialização de um módulo. Verifique os logs acima.")
         return
 
     sock = socket.socket()
@@ -55,7 +66,7 @@ def main():
         
         print(f"Autenticação enviada. Entrando no canal #{TTV_CHANNEL}")
         
-        send_chat_message(sock, f"Olá! AI_Yuh (v1.3.0) está online e com um cérebro novo! Me chame com @{BOT_NICK} ou use !ask.")
+        send_chat_message(sock, f"Olá! AI_Yuh (v1.4.0) está online. Cérebro conectado. Memória... carregando...")
         
         listen_for_messages(sock)
 
@@ -64,6 +75,9 @@ def main():
     finally:
         print("Fechando a conexão.")
         sock.close()
+
+# O resto do arquivo bot.py (send_chat_message, listen_for_messages, process_message)
+# permanece EXATAMENTE o mesmo da Fase 2. Não precisa ser alterado.
 
 def send_chat_message(sock, message):
     """Envia uma mensagem formatada para o chat da Twitch."""
@@ -107,7 +121,6 @@ def process_message(sock, raw_message):
         user_info = source.split('!')[0][1:]
         message_content = message_body.split(':', 1)[1].strip()
 
-        # Ignora mensagens do próprio bot
         if user_info.lower() == BOT_NICK:
             return
 
@@ -116,7 +129,9 @@ def process_message(sock, raw_message):
         msg_lower = message_content.lower()
         
         if msg_lower == "!ping":
-            send_chat_message(sock, f"Pong, @{user_info}! Minha conexão com a IA está: {'ATIVA' if gemini_handler.GEMINI_ENABLED else 'INATIVA'}.")
+            db_status = 'ATIVA' if database_handler.DB_ENABLED else 'INATIVA'
+            gemini_status = 'ATIVA' if gemini_handler.GEMINI_ENABLED else 'INATIVA'
+            send_chat_message(sock, f"Pong, @{user_info}! Conexão DB: {db_status} | Conexão IA: {gemini_status}.")
             return
 
         activation_ask = "!ask "
@@ -134,15 +149,8 @@ def process_message(sock, raw_message):
 
         if is_activated:
             if question:
-                # O bot foi ativado! Hora de chamar a IA.
                 send_chat_message(sock, f"@{user_info}, pensando sobre '{question}'...")
-                
-                # Esta é a chamada para o nosso novo módulo!
-                # Nota: Esta chamada é síncrona, o bot vai "pausar" enquanto espera a resposta.
-                # Para um bot de chat, isso geralmente é aceitável.
                 ai_response = gemini_handler.generate_response(question)
-                
-                # Envia a resposta da IA para o chat
                 send_chat_message(sock, f"@{user_info} {ai_response}")
             else:
                 response = f"Olá, @{user_info}! Você me chamou? Use !ask <sua pergunta> ou @{BOT_NICK} <sua pergunta>."
