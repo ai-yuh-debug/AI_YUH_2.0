@@ -12,7 +12,8 @@
 # Descrição: Este é o script principal para o bot da Twitch, AI_Yuh.
 #            Nesta primeira fase, o foco é estabelecer a conexão com a Twitch,
 #            carregar configurações de forma segura e responder a um comando básico
-#            para verificar a funcionalidade.
+#            para verificar a funcionalidade. Este código é a base para a
+#            implantação futura no Render.
 #
 # =========================================================================================
 
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 
 # Carrega as variáveis de ambiente do arquivo .env
 # Isso mantém suas credenciais seguras e fora do código-fonte.
+# O Render usará suas próprias variáveis de ambiente, mas este método é perfeito para desenvolvimento local.
 load_dotenv()
 
 class Bot(commands.Bot):
@@ -66,7 +68,7 @@ class Bot(commands.Bot):
             return
 
         # Imprime a mensagem no console para fins de depuração
-        print(f"{message.author.name}: {message.content}")
+        print(f"({message.timestamp.strftime('%H:%M:%S')}) {message.author.name}: {message.content}")
 
         # Processa os comandos definidos com @commands.command()
         await self.handle_commands(message)
@@ -88,8 +90,19 @@ class Bot(commands.Bot):
 #                               PONTO DE ENTRADA DO SCRIPT
 # =========================================================================================
 
-if __name__ == "__main__":
+def main():
+    """Função principal para rodar o bot."""
+    # Validação das variáveis de ambiente essenciais
+    required_vars = ['TTV_TOKEN', 'TTV_CLIENT_ID', 'BOT_NICK', 'TTV_CHANNEL']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        print(f"Erro: As seguintes variáveis de ambiente estão faltando no seu arquivo .env: {', '.join(missing_vars)}")
+        return
+
     # Cria uma instância da nossa classe Bot
     bot = Bot()
-    # Inicia a execução do bot
+    # Inicia a execução do bot (este método bloqueia a execução até o bot parar)
     bot.run()
+
+if __name__ == "__main__":
+    main()
