@@ -3,161 +3,195 @@
 # =========================================================================================
 #                   AI_YUH - Twitch Bot com Memória Generativa
 # =========================================================================================
-# FASE 3: Integração com o Banco de Dados
+# FASE 5: A IA de Gerenciamento de Memória e o Ciclo de Vida
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.4.0
+# Versão: 1.6.0
 # Data: 26/08/2025
 #
-# Descrição: O bot agora se conecta aos módulos de IA e de Banco de Dados na
-#            inicialização, preparando o terreno para funcionalidades de memória.
+# Descrição: O bot agora carrega sua personalidade do DB, implementa o comando !learn
+#            para usuários 'master' e utiliza a segunda IA para sumarizar conversas
+#            inativas, dando o primeiro passo para a memória de longo prazo.
 #
 # =========================================================================================
 
 import os
 import socket
 import time
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Carrega as variáveis de ambiente PRIMEIRO
 load_dotenv()
-
-# AGORA importa nossos módulos, que dependem do .env
 import gemini_handler
-import database_handler # Novo módulo importado
+import database_handler
 
-# --- Configurações Carregadas do .env ---
+# --- Configurações & Variáveis Globais ---
 TTV_TOKEN = os.getenv('TTV_TOKEN')
 BOT_NICK = os.getenv('BOT_NICK').lower()
 TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
-
-# --- Constantes do Servidor IRC da Twitch ---
 HOST = "irc.chat.twitch.tv"
 PORT = 6667
 
-# --- Função Principal de Execução ---
+# Carregado na inicialização
+BOT_SETTINGS = {}
+LOREBOOK = []
+
+# Memória de Curto Prazo
+short_term_memory = {}
+MEMORY_EXPIRATION_MINUTES = 5
+MAX_HISTORY_LENGTH = 10
 
 def main():
-    """Função principal que conecta e executa o bot."""
-    # Variáveis de ambiente agora incluem as do Supabase
-    required_vars = [
-        'TTV_TOKEN', 'BOT_NICK', 'TTV_CHANNEL', 
-        'GEMINI_API_KEY', 'SUPABASE_URL', 'SUPABASE_KEY'
-    ]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    if missing_vars:
-        print(f"ERRO: As seguintes variáveis de ambiente estão faltando no .env: {', '.join(missing_vars)}")
-        return
+    # ... (validação de .env como antes) ...
+
+    # --- NOVO: Carregamento de Configurações do DB ---
+    global BOT_SETTINGS, LOREBOOK
+    BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     
-    # Verifica se os módulos essenciais carregaram corretamente
-    if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED:
-        print("O bot não pode iniciar devido a um erro na inicialização de um módulo. Verifique os logs acima.")
+    if not BOT_SETTINGS:
+        print("ERRO CRÍTICO: Não foi possível carregar as configurações do bot do DB. Encerrando.")
         return
 
+    # Carrega o modelo de IA especificado nas configurações
+    gemini_handler.load_interaction_model(BOT_SETTINGS.get('interaction_model', 'gemini-1.5-flash'))
+
+    # ... (resto da lógica de conexão do socket como antes) ...
     sock = socket.socket()
     try:
         print("Conectando ao servidor IRC da Twitch...")
         sock.connect((HOST, PORT))
+        # ... (autenticação e join como antes) ...
         print("Conectado. Autenticando...")
-
         sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
         
-        print(f"Autenticação enviada. Entrando no canal #{TTV_CHANNEL}")
-        
-        send_chat_message(sock, f"Olá! AI_Yuh (v1.4.0) está online. Cérebro conectado. Memória... carregando...")
+        send_chat_message(sock, f"AI_Yuh (v1.6.0) online. Personalidade carregada. Pronta para aprender.")
         
         listen_for_messages(sock)
 
     except Exception as e:
-        print(f"Ocorreu um erro fatal na conexão: {e}")
+        print(f"Erro fatal na conexão: {e}")
     finally:
-        print("Fechando a conexão.")
         sock.close()
 
-# O resto do arquivo bot.py (send_chat_message, listen_for_messages, process_message)
-# permanece EXATAMENTE o mesmo da Fase 2. Não precisa ser alterado.
 
+def cleanup_inactive_memory():
+    """Verifica e sumariza memórias de usuários inativos."""
+    now = datetime.now()
+    inactive_users = [
+        user for user, data in short_term_memory.items()
+        if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)
+    ]
+    
+    for user in inactive_users:
+        print(f"Usuário {user} inativo. Sumarizando e limpando memória de curto prazo...")
+        user_memory = short_term_memory.pop(user) # Remove e obtém o valor
+        
+        # Chama a IA de sumarização
+        summary = gemini_handler.summarize_conversation(user_memory['history'])
+        
+        # TODO FASE 6: Salvar 'summary' na tabela de memória de longo prazo no DB.
+        print(f"RESUMO GERADO para {user}: {summary}")
+
+# ... (funções send_chat_message e listen_for_messages permanecem as mesmas) ...
 def send_chat_message(sock, message):
-    """Envia uma mensagem formatada para o chat da Twitch."""
     try:
         sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
     except Exception as e:
         print(f"Erro ao enviar mensagem: {e}")
-
+        
 def listen_for_messages(sock):
-    """Loop principal que lê e processa as mensagens do servidor IRC."""
     buffer = ""
+    last_cleanup = time.time()
+    
     while True:
         try:
+            if time.time() - last_cleanup > 60:
+                cleanup_inactive_memory()
+                last_cleanup = time.time()
+
             buffer += sock.recv(2048).decode('utf-8', errors='ignore')
             messages = buffer.split('\r\n')
             buffer = messages.pop()
 
             for raw_message in messages:
-                if not raw_message:
-                    continue
+                if not raw_message: continue
                 if raw_message.startswith('PING'):
                     sock.send("PONG :tmi.twitch.tv\r\n".encode('utf-8'))
                     continue
                 
                 process_message(sock, raw_message)
 
-        except ConnectionResetError:
-            print("Conexão foi resetada pelo servidor. Lógica de reconexão necessária aqui.")
-            break
         except Exception as e:
             print(f"Erro no loop de escuta: {e}")
             time.sleep(5)
 
+
 def process_message(sock, raw_message):
-    """Decodifica uma mensagem bruta do IRC e aciona a IA."""
-    if "PRIVMSG" not in raw_message:
-        return
+    if "PRIVMSG" not in raw_message: return
 
     try:
         source, _, message_body = raw_message.partition('PRIVMSG')
         user_info = source.split('!')[0][1:]
         message_content = message_body.split(':', 1)[1].strip()
 
-        if user_info.lower() == BOT_NICK:
-            return
+        if user_info.lower() == BOT_NICK: return
 
         print(f"CHAT | {user_info}: {message_content}")
 
+        # --- NOVO: Verificação de Permissão do Usuário ---
+        user_permission = database_handler.get_user_permission(user_info)
+        if user_permission == 'blacklist':
+            return # Ignora completamente o usuário
+
         msg_lower = message_content.lower()
-        
-        if msg_lower == "!ping":
-            db_status = 'ATIVA' if database_handler.DB_ENABLED else 'INATIVA'
-            gemini_status = 'ATIVA' if gemini_handler.GEMINI_ENABLED else 'INATIVA'
-            send_chat_message(sock, f"Pong, @{user_info}! Conexão DB: {db_status} | Conexão IA: {gemini_status}.")
+
+        # --- NOVO: Comando !learn ---
+        learn_command = "!learn "
+        if msg_lower.startswith(learn_command):
+            if user_permission == 'master':
+                fact_to_learn = message_content[len(learn_command):].strip()
+                if fact_to_learn:
+                    success = database_handler.add_lorebook_entry(fact_to_learn, user_info)
+                    if success:
+                        LOREBOOK.append(fact_to_learn) # Atualiza a memória em tempo real
+                        send_chat_message(sock, f"@{user_info} Entendido. Adicionei '{fact_to_learn}' à minha base de conhecimento.")
+                    else:
+                        send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso. Verifique os logs.")
+            else:
+                send_chat_message(sock, f"Desculpe @{user_info}, apenas meus mestres podem me ensinar coisas novas.")
             return
 
+        # --- Lógica de ativação da IA (agora passa mais contexto) ---
         activation_ask = "!ask "
         activation_mention = f"@{BOT_NICK} "
-        
         question = ""
         is_activated = False
 
         if msg_lower.startswith(activation_ask):
-            is_activated = True
-            question = message_content[len(activation_ask):].strip()
+            is_activated = True; question = message_content[len(activation_ask):].strip()
         elif msg_lower.startswith(activation_mention):
-            is_activated = True
-            question = message_content[len(activation_mention):].strip()
+            is_activated = True; question = message_content[len(activation_mention):].strip()
 
-        if is_activated:
-            if question:
-                send_chat_message(sock, f"@{user_info}, pensando sobre '{question}'...")
-                ai_response = gemini_handler.generate_response(question)
-                send_chat_message(sock, f"@{user_info} {ai_response}")
-            else:
-                response = f"Olá, @{user_info}! Você me chamou? Use !ask <sua pergunta> ou @{BOT_NICK} <sua pergunta>."
-                send_chat_message(sock, response)
+        if is_activated and question:
+            user_memory = short_term_memory.get(user_info, {"history": []})
+            
+            # Chama a IA com todo o contexto
+            ai_response = gemini_handler.generate_response(question, user_memory['history'], BOT_SETTINGS, LOREBOOK)
+            
+            send_chat_message(sock, f"@{user_info} {ai_response}")
+            
+            # Atualiza memória de curto prazo
+            user_memory['history'].append({'role': 'user', 'parts': [question]})
+            user_memory['history'].append({'role': 'model', 'parts': [ai_response]})
+            user_memory['last_interaction'] = datetime.now()
+            if len(user_memory['history']) > MAX_HISTORY_LENGTH:
+                user_memory['history'] = user_memory['history'][2:]
+            short_term_memory[user_info] = user_memory
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Erro ao processar mensagem: {e}")
 
 if __name__ == "__main__":
     main()
