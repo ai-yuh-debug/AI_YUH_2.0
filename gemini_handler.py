@@ -6,19 +6,19 @@
 # FASE 6: O Ciclo Completo da Memória e Busca na Web
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.3.0
+# Versão: 1.3.1 (Correção da biblioteca de busca)
 # Data: 26/08/2025
 #
-# Descrição: Adiciona uma função de busca na web e a integra ao prompt,
-#            junto com as memórias de longo prazo, para dar à IA um
-#            conhecimento abrangente e atualizado.
+# Descrição: Corrige a biblioteca de busca para 'ddgs' e melhora o
+#            tratamento de erro para evitar alucinações da IA.
 #
 # =========================================================================================
 
 import os
 import google.generativeai as genai
-from duckduckgo_search import DDGS
+from ddgs import DDGS # MUDANÇA 1: Importa da nova biblioteca 'ddgs'
 
+# --- Configuração das IAs ---
 GEMINI_ENABLED = False
 interaction_model = None
 summarizer_model = None
@@ -52,17 +52,17 @@ def web_search(query: str, num_results: int = 3) -> str:
     """Realiza uma busca na web e retorna um resumo dos resultados."""
     print(f"Realizando busca na web por: '{query}'")
     try:
-        with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=num_results)]
+        # A sintaxe da função em si não mudou, apenas o import
+        results = DDGS().text(query, max_results=num_results)
         
         if not results:
-            return "Nenhum resultado encontrado na busca."
+            return "" # Retorna string vazia se não houver resultados
             
         formatted_results = "\n".join(f"- {res['body']}" for res in results)
         return f"Aqui estão alguns resultados da busca na web sobre '{query}':\n{formatted_results}"
     except Exception as e:
         print(f"Erro na busca da web: {e}")
-        return "Ocorreu um erro ao tentar buscar na web."
+        return "" # MUDANÇA 2: Retorna uma string vazia em caso de erro
 
 def generate_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, web_context: str) -> str:
     """Gera uma resposta da IA usando todo o contexto disponível."""
@@ -84,6 +84,7 @@ def generate_response(question: str, history: list, settings: dict, lorebook: li
             full_prompt.append({'role': 'user', 'parts': [f"Para referência, aqui estão alguns resumos de suas conversas passadas comigo:\n{memories_text}"]})
             full_prompt.append({'role': 'model', 'parts': ["Ok, vou considerar essas memórias."]})
         
+        # Este 'if' agora funciona corretamente, ignorando o contexto se a string estiver vazia
         if web_context:
             full_prompt.append({'role': 'user', 'parts': [f"Para te ajudar a responder, aqui está um contexto atualizado da internet:\n{web_context}"]})
             full_prompt.append({'role': 'model', 'parts': ["Obrigado pelo contexto da web."]})
