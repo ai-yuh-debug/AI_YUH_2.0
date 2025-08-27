@@ -76,3 +76,13 @@ def save_hierarchical_memory(level: str, summary: str):
         print(f"Memória hierárquica (nível: {level}) salva com sucesso.")
     except Exception as e:
         print(f"Erro ao salvar memória hierárquica: {e}")
+
+def search_hierarchical_memory(limit: int = 3) -> list[str]:
+    """Busca as memórias hierárquicas (globais) mais recentes."""
+    if not DB_ENABLED: return []
+    try:
+        response = supabase_client.table('hierarchical_memory').select("summary").eq("memory_level", "transfer").order("created_at", desc=True).limit(limit).execute()
+        return [item['summary'] for item in response.data]
+    except Exception as e:
+        print(f"Erro ao buscar memória hierárquica: {e}")
+        return []
