@@ -103,14 +103,25 @@ def get_current_lorebook() -> list[str]:
         return [item['entry'] for item in response.data]
     except Exception as e:
         print(f"Erro ao buscar o lorebook atual: {e}"); return []
-
+        
 def delete_lorebook_entry(entry_id: int):
     """Deleta uma entrada do lorebook com base no seu ID."""
-    if not DB_ENABLED:
-        print("AVISO: Conexão com DB desabilitada. Não foi possível deletar a entrada.")
-        return
+    if not DB_ENABLED: return
     try:
         supabase_client.table('lorebook').delete().eq('id', entry_id).execute()
         print(f"Entrada do Lorebook (ID: {entry_id}) deletada com sucesso.")
     except Exception as e:
         print(f"Erro ao deletar entrada do lorebook (ID: {entry_id}): {e}")
+
+def update_bot_status(status: str):
+    """Atualiza o status do bot na tabela bot_status."""
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('bot_status').upsert({
+            "status_key": "bot_state",
+            "status_value": status,
+            "last_updated": datetime.now(pytz.utc).isoformat()
+        }).execute()
+        print(f"Status do bot atualizado para: {status}")
+    except Exception as e:
+        print(f"Erro ao atualizar status do bot: {e}")

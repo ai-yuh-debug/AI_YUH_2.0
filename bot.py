@@ -19,7 +19,7 @@ TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
 HOST = "irc.chat.twitch.tv"
 PORT = 6667
 BOT_SETTINGS = {}
-LOREBOOK = [] # A variável global continua aqui
+LOREBOOK = []
 short_term_memory = {}
 global_chat_buffer = []
 GLOBAL_BUFFER_MAX_MESSAGES = 40
@@ -43,8 +43,7 @@ def consolidate_daily_memories():
     end_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.max.time()))
     memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer", start_of_yesterday, end_of_yesterday)
     if not memories_to_consolidate:
-        print("AGENDADOR: Nenhuma memória 'transfer' de ontem para consolidar.")
-        return
+        print("AGENDADOR: Nenhuma memória 'transfer' de ontem para consolidar."); return
     print(f"AGENDADOR: Encontradas {len(memories_to_consolidate)} memórias. Sumarizando...")
     full_text = "\n".join([mem['summary'] for mem in memories_to_consolidate])
     daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia:\n{full_text}")
@@ -52,6 +51,10 @@ def consolidate_daily_memories():
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
     database_handler.delete_memories_by_ids(ids_to_delete)
+
+def send_heartbeat():
+    """Tarefa agendada para atualizar o status do bot e confirmar que está online."""
+    database_handler.update_bot_status("Online")
 
 def send_chat_message(sock, message):
     try: sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
@@ -64,8 +67,7 @@ def summarize_and_clear_global_buffer():
     transcript = "\n".join(f"{msg['user']}: {msg['content']}" for msg in global_chat_buffer)
     summary = gemini_handler.summarize_global_chat(transcript)
     database_handler.save_hierarchical_memory("transfer", summary)
-    global_chat_buffer = []
-    print("Buffer de transferência sumarizado e limpo.")
+    global_chat_buffer = []; print("Buffer de transferência sumarizado e limpo.")
     
 def cleanup_inactive_memory():
     now = datetime.now()
@@ -96,10 +98,8 @@ def process_message(sock, raw_message):
             if user_permission == 'master':
                 fact = message_content[len(learn_command):].strip()
                 if fact and database_handler.add_lorebook_entry(fact, user_info):
-                    # --- A CORREÇÃO ESTÁ AQUI ---
                     global LOREBOOK
-                    LOREBOOK = database_handler.get_current_lorebook() # Atualiza a "foto"
-                    # ---------------------------
+                    LOREBOOK = database_handler.get_current_lorebook()
                     send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
                 else:
                     send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
@@ -113,20 +113,20 @@ def process_message(sock, raw_message):
         elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
 
         if is_activated and question:
-            # Não precisamos mudar nada aqui, pois ele usará a variável global LOREBOOK que agora é atualizada
+            current_lorebook = database_handler.get_current_lorebook()
             long_term_memories = database_handler.search_long_term_memory(user_info)
             hierarchical_memories = database_handler.search_hierarchical_memory()
             user_memory = short_term_memory.get(user_info, {"history": []})
             
             print("Tentando responder sem busca na web...")
-            initial_response = gemini_handler.generate_response_without_search(question, user_memory['history'], BOT_SETTINGS, LOREBOOK, long_term_memories, hierarchical_memories)
+            initial_response = gemini_handler.generate_response_without_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories)
             
             final_response = initial_response
             if any(keyword in initial_response.lower() for keyword in UNCERTAINTY_KEYWORDS):
                 print(f"Resposta inicial indica incerteza. Realizando busca na web.")
                 web_context = gemini_handler.web_search(question)
                 if web_context:
-                    final_response = gemini_handler.generate_response_with_search(question, user_memory['history'], BOT_SETTINGS, LOREBOOK, long_term_memories, hierarchical_memories, web_context)
+                    final_response = gemini_handler.generate_response_with_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, web_context)
             else:
                 print("Resposta inicial foi confiante. Não é necessário buscar na web.")
 
@@ -161,7 +161,6 @@ def listen_for_messages(sock):
 
 def main():
     global BOT_SETTINGS, LOREBOOK
-    # A variável LOREBOOK é carregada na inicialização, como no seu código
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS: print("ERRO CRÍTICO: Não foi possível carregar as configurações."); return
     gemini_handler.load_models_from_settings(BOT_SETTINGS)
@@ -169,6 +168,7 @@ def main():
     
     schedule.every(GLOBAL_BUFFER_MAX_MINUTES).minutes.do(summarize_and_clear_global_buffer)
     schedule.every().day.at("00:00", str(TIMEZONE)).do(consolidate_daily_memories)
+    schedule.every(2).minutes.do(send_heartbeat)
     
     scheduler_thread = threading.Thread(target=run_scheduler, name="MemoryScheduler")
     scheduler_thread.daemon = True
@@ -176,18 +176,24 @@ def main():
     
     sock = socket.socket()
     try:
+        database_handler.update_bot_status("Online")
         print("Conectando ao servidor IRC da Twitch...")
         sock.connect((HOST, PORT))
         print("Conectado. Autenticando...")
         sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
-        send_chat_message(sock, f"AI_Yuh (v2.3.1-hotfix) online. Sincronização com DB corrigida.")
+        send_chat_message(sock, f"AI_Yuh (v2.4.0-heartbeat) online. Status do painel ativado.")
         listen_for_messages(sock)
+    except KeyboardInterrupt:
+        print("\nDesligamento solicitado pelo usuário (Ctrl+C).")
     except Exception as e:
         print(f"Erro fatal na conexão: {e}")
     finally:
-        print("Fechando a conexão."); sock.close()
+        print("Desligando... Atualizando status para Offline.")
+        database_handler.update_bot_status("Offline")
+        sock.close()
+        print("Conexão fechada. Adeus!")
 
 if __name__ == "__main__":
     main()
