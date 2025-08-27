@@ -11,7 +11,7 @@ try:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
     if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ValueError("Credenciais do SupABASE não encontradas")
+        raise ValueError("Credenciais do Supabase não encontradas")
     supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
     print("Módulo de Banco de Dados inicializado com sucesso.")
     DB_ENABLED = True
@@ -117,12 +117,11 @@ def update_bot_status(status: str):
     """Atualiza o status do bot na tabela bot_status."""
     if not DB_ENABLED: return
     try:
-        # Usamos 'update' para modificar a linha existente que corresponde à chave.
-        supabase_client.table('bot_status').update({
+        supabase_client.table('bot_status').upsert({
+            "status_key": "bot_state",
             "status_value": status,
             "last_updated": datetime.now(pytz.utc).isoformat()
-        }).eq("status_key", "bot_state").execute()
-        
+        }).execute()
         print(f"Status do bot atualizado para: {status}")
     except Exception as e:
         print(f"Erro ao atualizar status do bot: {e}")
