@@ -24,9 +24,9 @@ def load_initial_data():
         print("Carregando dados iniciais do banco de dados...")
         settings_response = supabase_client.table('settings').select("*").limit(1).single().execute()
         settings = settings_response.data; print(f"Configurações carregadas.")
-        # A busca inicial do lorebook será ignorada pelo bot.py para usar a busca em tempo real
         lorebook_response = supabase_client.table('lorebook').select("entry").execute()
         lorebook = [item['entry'] for item in lorebook_response.data]
+        print(f"Lorebook carregado com {len(lorebook)} entradas.")
         return settings, lorebook
     except Exception as e:
         print(f"ERRO ao carregar dados iniciais: {e}"); return None, []
@@ -34,12 +34,8 @@ def load_initial_data():
 def get_user_permission(username: str) -> str:
     if not DB_ENABLED: return 'normal'
     try:
-        # A busca em tempo real já estava aqui e deveria funcionar.
-        # Vamos garantir que não há erros de digitação ou lógica.
         user_response = supabase_client.table('users').select("permission_level").eq("twitch_username", username.lower()).execute()
-        if user_response.data:
-            return user_response.data[0]['permission_level']
-        return 'normal'
+        return user_response.data[0]['permission_level'] if user_response.data else 'normal'
     except Exception as e:
         print(f"Erro ao verificar permissão para {username}: {e}"); return 'normal'
 
@@ -107,3 +103,14 @@ def get_current_lorebook() -> list[str]:
         return [item['entry'] for item in response.data]
     except Exception as e:
         print(f"Erro ao buscar o lorebook atual: {e}"); return []
+
+def delete_lorebook_entry(entry_id: int):
+    """Deleta uma entrada do lorebook com base no seu ID."""
+    if not DB_ENABLED:
+        print("AVISO: Conexão com DB desabilitada. Não foi possível deletar a entrada.")
+        return
+    try:
+        supabase_client.table('lorebook').delete().eq('id', entry_id).execute()
+        print(f"Entrada do Lorebook (ID: {entry_id}) deletada com sucesso.")
+    except Exception as e:
+        print(f"Erro ao deletar entrada do lorebook (ID: {entry_id}): {e}")
