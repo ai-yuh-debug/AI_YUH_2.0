@@ -6,12 +6,26 @@ from ddgs import DDGS
 GEMINI_ENABLED = False
 interaction_model = None
 summarizer_model = None
+# --- MODIFICAÇÃO: Ajustando os filtros de segurança para serem menos restritivos ---
 safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_ONLY_HIGH", # Bloquear apenas se a probabilidade for alta
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_ONLY_HIGH", # Bloquear apenas se a probabilidade for alta
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE", # Manter este um pouco mais restrito
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE", # Manter este também
+    },
 ]
+# ---------------------------------------------------------------------------------
 
 try:
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -29,11 +43,14 @@ def load_models_from_settings(settings: dict):
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash')
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name, safety_settings=safety_settings)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")
-        summarizer_model = genai.GenerativeModel(archivist_model_name)
+        # O modelo de sumarização também deve usar as configurações de segurança
+        summarizer_model = genai.GenerativeModel(archivist_model_name, safety_settings=safety_settings)
         print(f"Modelo arquivista '{archivist_model_name}' carregado.")
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
+# ... O RESTANTE DO ARQUIVO (web_search, _build_base_prompt, generate_response_..., etc.)
+# PERMANECE EXATAMENTE O MESMO. NENHUMA OUTRA MUDANÇA É NECESSÁRIA.
 def web_search(query: str, num_results: int = 3) -> str:
     print(f"Realizando busca na web (DDGS) por: '{query}'")
     try:
@@ -62,6 +79,12 @@ def generate_response_without_search(question: str, history: list, settings: dic
         prompt = _build_base_prompt(settings, lorebook, long_term_memories, history, hierarchical_memories) + f"user: {question}\nmodel:"
         config = genai.types.GenerationConfig(temperature=float(settings.get('temperature',0.9)), top_p=float(settings.get('top_p',1.0)), top_k=int(settings.get('top_k',1)), max_output_tokens=int(settings.get('max_output_tokens',256)))
         response = interaction_model.generate_content(prompt, generation_config=config)
+        
+        # --- NOVO: Tratamento de erro para respostas vazias ---
+        if not response.parts:
+            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança.")
+            return "Minha resposta foi bloqueada pelos meus filtros de segurança. Tente reformular a pergunta."
+            
         return response.text.replace('*', '').replace('`', '').strip()
     except Exception as e:
         print(f"Erro na geração (sem busca): {e}"); return "Ocorreu um erro ao pensar."
@@ -74,6 +97,12 @@ def generate_response_with_search(question: str, history: list, settings: dict, 
         prompt += f"user: {question}\nmodel:"
         config = genai.types.GenerationConfig(temperature=float(settings.get('temperature',0.9)), top_p=float(settings.get('top_p',1.0)), top_k=int(settings.get('top_k',1)), max_output_tokens=int(settings.get('max_output_tokens',256)))
         response = interaction_model.generate_content(prompt, generation_config=config)
+        
+        # --- NOVO: Tratamento de erro para respostas vazias ---
+        if not response.parts:
+            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança.")
+            return "Minha resposta foi bloqueada pelos meus filtros de segurança. Tente reformular a pergunta."
+
         return response.text.replace('*', '').replace('`', '').strip()[:int(settings.get('max_output_tokens',256))]
     except Exception as e:
         print(f"Erro na geração (com busca): {e}"); return "Ocorreu um erro ao pensar."
