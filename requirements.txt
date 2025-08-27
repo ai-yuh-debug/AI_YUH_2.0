@@ -1,52 +1,5 @@
-# ==============================================================================
-#        Dependências Congeladas para o Projeto AI_YUH 2.0
-# ==============================================================================
-# Este arquivo foi gerado usando 'pip freeze' e contém as versões exatas
-# de todos os pacotes no ambiente de desenvolvimento funcional.
-# Usar versões exatas garante que o ambiente seja 100% reprodutível,
-# evitando problemas com atualizações inesperadas ou caches de pacotes.
-# Para instalar, use: pip install -r requirements.txt
-# ==============================================================================
-
-annotated-types==0.7.0
-anyio==4.4.0
-certifi==2024.7.4
-charset-normalizer==3.3.2
-click==8.1.7
-colorama==0.4.6
-ddgs==6.1.7  # VERSÃO CORRIGIDA (ou a mais recente que seu pip sugerir)
-google-ai-generativelanguage==0.6.15
-google-api-core==2.25.1
-google-api-python-client==2.136.0
-google-auth==2.31.0
-google-auth-httplib2==0.2.0
-google-generativeai==0.10.0
-googleapis-common-protos==1.63.2
-gotrue==2.5.2
-grpcio==1.64.1
-grpcio-status==1.62.2
-httplib2==0.22.0
-httpx==0.27.0
-httpcore==1.0.5
-idna==3.7
-josepy==2.0.0
-postgrest==0.12.1
-protobuf==5.27.2
-pyasn1==0.6.0
-pyasn1-modules==0.4.0
-pyparsing==3.1.2
-pydantic==2.8.2
-pydantic_core==2.20.1
-python-dotenv==1.0.1
-realtime==2.2.2
-requests==2.32.3
-rsa==4.9
-six==1.16.0
-sniffio==1.3.1
-supabase==2.5.0
-tqdm==4.66.4
-typing-extensions==4.12.2
-typing-inspection==0.4.1
-uritemplate==4.2.0
-urllib3==2.2.2
-websockets==12.0
+# Versão com a biblioteca oficial e moderna 'google-cloud-aiplatform'
+python-dotenv
+google-cloud-aiplatform
+supabase
+ddgs
