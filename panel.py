@@ -58,7 +58,6 @@ def get_hierarchical_memory():
     try: return pd.DataFrame(supabase_client.table('hierarchical_memory').select("*").order("created_at", desc=True).limit(100).execute().data)
     except Exception as e: st.error(f"Erro ao carregar memória hierárquica: {e}"); return pd.DataFrame()
 
-
 # --- Interface Principal ---
 st.title("🤖 Painel de Controle do AI_Yuh Bot")
 
@@ -107,12 +106,13 @@ if settings:
 
     with st.expander("🧠 Configurações de Memória Generativa"):
         with st.form("memory_form"):
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                mem_exp = st.number_input("Expiração da Memória Pessoal (minutos)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
+                mem_exp = st.number_input("Expiração Mem. Pessoal (min)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
             with col2:
-                glob_max_msg = st.number_input("Gatilho de Sumarização (mensagens)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
-                glob_max_min = st.number_input("Gatilho de Sumarização (minutos)", value=int(settings.get('global_buffer_max_minutes', 15)), min_value=1)
+                glob_max_msg = st.number_input("Gatilho Sumarização (msgs)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
+            with col3:
+                glob_max_min = st.number_input("Gatilho Sumarização (min)", value=int(settings.get('global_buffer_max_minutes', 15)), min_value=1)
             if st.form_submit_button("Salvar Configurações de Memória"):
                 try:
                     supabase_client.table('settings').update({'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg, 'global_buffer_max_minutes': glob_max_min}).eq('id', settings['id']).execute()
@@ -179,3 +179,8 @@ with st.expander("🌍 Visualizar Memória Global"):
         hier_mem_df['created_at'] = pd.to_datetime(hier_mem_df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
         st.dataframe(hier_mem_df, use_container_width=True, height=600)
     else: st.info("Nenhuma memória hierárquica encontrada.")
+
+st.sidebar.header("Ações Rápidas")
+if st.sidebar.button("Forçar Recarga do Painel"):
+    st.cache_data.clear()
+    st.rerun()
