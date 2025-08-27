@@ -1,5 +1,8 @@
-# Versão com a biblioteca oficial e moderna 'google-cloud-aiplatform'
+# Versão final usando a biblioteca 'google-generativeai' do AI Studio.
+# As versões foram congeladas para garantir a reprodutibilidade.
+
 python-dotenv
-google-cloud-aiplatform
-supabase
-ddgs
+google-generativeai==0.10.0 # <--- A versão correta que resolve o bug
+supabase==2.5.0
+ddgs==6.1.7 # Ou a versão mais recente que funcionar para você
+# Adicione outras dependências que o pip freeze gerar
