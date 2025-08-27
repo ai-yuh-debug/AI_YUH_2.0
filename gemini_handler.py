@@ -2,15 +2,15 @@
 # =========================================================================================
 #                   AI_YUH - Módulo de Gerenciamento da IA
 # =========================================================================================
-# FASE 10: Versão de Compatibilidade Final (v1.8.2)
+# FASE 11: Reativação de Todas as Camadas de Memória
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.8.2 (Tentativa de correção do bloqueio de histórico)
+# Versão: 1.8.3 (Final de Compatibilidade)
 # Data: 26/08/2025
 #
-# Descrição: Simplifica radicalmente a passagem de contexto para a API,
-#            usando o parâmetro 'history' de start_chat, que pode ser mais
-#            estável na biblioteca v0.8.5.
+# Descrição: Reintegra o Lorebook e as memórias de longo prazo/hierárquica
+#            dentro da nova estrutura de passagem de histórico, que se provou
+#            estável com a biblioteca v0.8.5.
 #
 # =========================================================================================
 
@@ -57,17 +57,40 @@ def web_search(query: str, num_results: int = 3) -> str:
     except Exception as e:
         print(f"Erro na busca da web: {e}"); return ""
 
-def _generate_response(question: str, history: list, settings: dict) -> str:
+def _generate_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, web_context: str) -> str:
     """Função unificada que usa a passagem de histórico via start_chat."""
     try:
-        # Simplificação Radical: Construir um histórico único para a v0.8.5
         full_history = []
         
-        # Injeção de personalidade e contextos como mensagens de sistema
+        # --- REATIVAÇÃO DE TODAS AS CAMADAS DE MEMÓRIA ---
+        # 1. Injeção de personalidade e contextos como mensagens de sistema
         full_history.append({'role': 'user', 'parts': [settings.get('personality_prompt', '')]})
-        full_history.append({'role': 'model', 'parts': ["Entendido."]})
+        full_history.append({'role': 'model', 'parts': ["Entendido. Assumirei essa personalidade e seguirei todas as instruções a seguir."]})
         
-        # Adiciona o histórico da conversa
+        # 2. Reativação do Lorebook
+        if lorebook:
+            lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
+            full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
+            full_history.append({'role': 'model', 'parts': ["Compreendido."]})
+
+        # 3. Reativação da Memória Pessoal
+        if long_term_memories:
+            memories_text = "\n".join(f"- {mem}" for mem in long_term_memories)
+            full_history.append({'role': 'user', 'parts': [f"Resumos de conversas passadas comigo:\n{memories_text}"]})
+            full_history.append({'role': 'model', 'parts': ["Ok."]})
+        
+        # 4. Reativação da Memória Hierárquica
+        if hierarchical_memories:
+            hier_mem_text = "\n".join(f"- {mem}" for mem in hierarchical_memories)
+            full_history.append({'role': 'user', 'parts': [f"Resumos de eventos recentes no chat:\n{hier_mem_text}"]})
+            full_history.append({'role': 'model', 'parts': ["Ok."]})
+            
+        # 5. Adiciona o contexto da web, se houver
+        if web_context:
+            full_history.append({'role': 'user', 'parts': [web_context]})
+            full_history.append({'role': 'model', 'parts': ["Obrigado pelo contexto da web."]})
+
+        # 6. Adiciona o histórico da conversa atual
         full_history.extend(history)
         
         chat = interaction_model.start_chat(history=full_history)
@@ -86,15 +109,12 @@ def _generate_response(question: str, history: list, settings: dict) -> str:
              return "Minha resposta foi bloqueada."
         print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
 
-# --- As funções de geração agora são simplificadas ---
+# --- As funções de geração agora chamam a função unificada com todos os parâmetros ---
 def generate_response_without_search(question, history, settings, lorebook, long_term_memories, hierarchical_memories):
-    # NOTA: Com a simplificação, não estamos injetando lorebook e memórias por enquanto,
-    # para isolar a causa do bug.
-    return _generate_response(question, history, settings)
+    return _generate_response(question, history, settings, lorebook, long_term_memories, hierarchical_memories, "")
 
 def generate_response_with_search(question, history, settings, lorebook, long_term_memories, hierarchical_memories, web_context):
-    # NOTA: Simplificado para isolar o bug.
-    return _generate_response(question, history, settings)
+    return _generate_response(question, history, settings, lorebook, long_term_memories, hierarchical_memories, web_context)
     
 # ... (funções de sumarização inalteradas) ...
 def summarize_conversation(conversation_history):
