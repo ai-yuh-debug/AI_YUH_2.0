@@ -1,4 +1,19 @@
 # -*- coding: utf-8 -*-
+# =========================================================================================
+#                   AI_YUH - Módulo de Gerenciamento da IA
+# =========================================================================================
+# FASE 9: Configurações de IA Detalhadas
+#
+# Autor: Seu Nome/Apelido
+# Versão: 1.7.2 (Filtros de Segurança Relaxados)
+# Data: 26/08/2025
+#
+# Descrição: Ajusta os filtros de segurança para BLOCK_NONE para as categorias
+#            de assédio e discurso de ódio, permitindo que a IA responda a
+#            uma gama mais ampla de tópicos.
+#
+# =========================================================================================
+
 import os
 import google.generativeai as genai
 from ddgs import DDGS
@@ -6,26 +21,27 @@ from ddgs import DDGS
 GEMINI_ENABLED = False
 interaction_model = None
 summarizer_model = None
-# --- MODIFICAÇÃO: Ajustando os filtros de segurança para serem menos restritivos ---
+
+# --- MODIFICAÇÃO: Filtros de segurança ajustados para BLOCK_NONE ---
 safety_settings = [
     {
         "category": "HARM_CATEGORY_HARASSMENT",
-        "threshold": "BLOCK_ONLY_HIGH", # Bloquear apenas se a probabilidade for alta
+        "threshold": "BLOCK_NONE",
     },
     {
         "category": "HARM_CATEGORY_HATE_SPEECH",
-        "threshold": "BLOCK_ONLY_HIGH", # Bloquear apenas se a probabilidade for alta
+        "threshold": "BLOCK_NONE",
     },
     {
         "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "threshold": "BLOCK_MEDIUM_AND_ABOVE", # Manter este um pouco mais restrito
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
     },
     {
         "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-        "threshold": "BLOCK_MEDIUM_AND_ABOVE", # Manter este também
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
     },
 ]
-# ---------------------------------------------------------------------------------
+# --------------------------------------------------------------------
 
 try:
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -43,14 +59,11 @@ def load_models_from_settings(settings: dict):
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash')
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name, safety_settings=safety_settings)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")
-        # O modelo de sumarização também deve usar as configurações de segurança
         summarizer_model = genai.GenerativeModel(archivist_model_name, safety_settings=safety_settings)
         print(f"Modelo arquivista '{archivist_model_name}' carregado.")
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
-# ... O RESTANTE DO ARQUIVO (web_search, _build_base_prompt, generate_response_..., etc.)
-# PERMANECE EXATAMENTE O MESMO. NENHUMA OUTRA MUDANÇA É NECESSÁRIA.
 def web_search(query: str, num_results: int = 3) -> str:
     print(f"Realizando busca na web (DDGS) por: '{query}'")
     try:
@@ -61,7 +74,6 @@ def web_search(query: str, num_results: int = 3) -> str:
         print(f"Erro na busca da web: {e}"); return ""
 
 def _build_base_prompt(settings: dict, lorebook: list, long_term_memories: list, history: list, hierarchical_memories: list) -> str:
-    """Função auxiliar para construir o prompt base com TODOS os contextos."""
     prompt_text = settings.get('personality_prompt', '') + "\n\n"
     if lorebook:
         prompt_text += f"{settings.get('lorebook_prompt', '')}\n" + "\n".join(f"- {fact}" for fact in lorebook) + "\n\n"
@@ -80,7 +92,6 @@ def generate_response_without_search(question: str, history: list, settings: dic
         config = genai.types.GenerationConfig(temperature=float(settings.get('temperature',0.9)), top_p=float(settings.get('top_p',1.0)), top_k=int(settings.get('top_k',1)), max_output_tokens=int(settings.get('max_output_tokens',256)))
         response = interaction_model.generate_content(prompt, generation_config=config)
         
-        # --- NOVO: Tratamento de erro para respostas vazias ---
         if not response.parts:
             print("AVISO: A resposta da IA foi bloqueada por filtros de segurança.")
             return "Minha resposta foi bloqueada pelos meus filtros de segurança. Tente reformular a pergunta."
@@ -97,8 +108,7 @@ def generate_response_with_search(question: str, history: list, settings: dict, 
         prompt += f"user: {question}\nmodel:"
         config = genai.types.GenerationConfig(temperature=float(settings.get('temperature',0.9)), top_p=float(settings.get('top_p',1.0)), top_k=int(settings.get('top_k',1)), max_output_tokens=int(settings.get('max_output_tokens',256)))
         response = interaction_model.generate_content(prompt, generation_config=config)
-        
-        # --- NOVO: Tratamento de erro para respostas vazias ---
+
         if not response.parts:
             print("AVISO: A resposta da IA foi bloqueada por filtros de segurança.")
             return "Minha resposta foi bloqueada pelos meus filtros de segurança. Tente reformular a pergunta."
@@ -112,7 +122,7 @@ def summarize_conversation(conversation_history):
     try:
         transcript = "\n".join(f"{msg['role']}: {msg['parts'][0]}" for msg in conversation_history)
         prompt = f"Resuma os pontos principais da conversa a seguir em uma frase impessoal:\n\n{transcript}\n\nResumo:"
-        response = summarizer_model.generate_content(prompt)
+        response = summarizer_model.generate_content(prompt, safety_settings=safety_settings)
         return response.text.strip()
     except Exception as e:
         print(f"Erro ao sumarizar conversa: {e}"); return "Erro de sumarização."
@@ -121,7 +131,7 @@ def summarize_global_chat(chat_transcript: str) -> str:
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Modelo arquivista indisponível."
     try:
         prompt = f"A seguir está uma transcrição do chat de uma live. Resuma os eventos, piadas e tópicos mais importantes. Ignore spam.\n\n{chat_transcript}\n\nResumo dos Eventos:"
-        response = summarizer_model.generate_content(prompt)
+        response = summarizer_model.generate_content(prompt, safety_settings=safety_settings)
         return response.text.strip()
     except Exception as e:
         print(f"Erro ao sumarizar chat global: {e}"); return "Erro de sumarização global."
