@@ -1,8 +1,6 @@
-# Versão final usando a biblioteca 'google-generativeai' do AI Studio.
-# As versões foram congeladas para garantir a reprodutibilidade.
-
+# Versão congelada para compatibilidade máxima (Python < 3.9)
+# Usa DDGS como único método de busca na web.
 python-dotenv
-google-generativeai==0.10.0 # <--- A versão correta que resolve o bug
-supabase==2.5.0
-ddgs==6.1.7 # Ou a versão mais recente que funcionar para você
-# Adicione outras dependências que o pip freeze gerar
+google-generativeai==0.8.5
+supabase
+ddgs

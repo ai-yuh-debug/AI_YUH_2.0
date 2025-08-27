@@ -1,19 +1,4 @@
 # -*- coding: utf-8 -*-
-
-# =========================================================================================
-#                   AI_YUH - Twitch Bot com Memória Generativa
-# =========================================================================================
-# FASE 6: O Ciclo Completo da Memória e Busca na Web (HÍBRIDO)
-#
-# Autor: Seu Nome/Apelido
-# Versão: 1.9.0 (Busca Híbrida e Configurável)
-# Data: 26/08/2025
-#
-# Descrição: O bot agora carrega a configuração de busca do DB e passa
-#            para o handler da IA, que decide qual método de busca usar.
-#
-# =========================================================================================
-
 import os
 import socket
 import time
@@ -24,7 +9,7 @@ load_dotenv()
 import gemini_handler
 import database_handler
 
-# --- Configurações & Variáveis Globais (inalterado) ---
+# --- Configurações & Variáveis Globais ---
 TTV_TOKEN = os.getenv('TTV_TOKEN')
 BOT_NICK = os.getenv('BOT_NICK').lower()
 TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
@@ -36,17 +21,14 @@ short_term_memory = {}
 MEMORY_EXPIRATION_MINUTES = 5
 MAX_HISTORY_LENGTH = 10
 
-# --- Funções Auxiliares (inalterado) ---
+# --- Funções Auxiliares ---
 def send_chat_message(sock, message):
     try: sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
     except Exception as e: print(f"Erro ao enviar mensagem: {e}")
 
 def cleanup_inactive_memory():
     now = datetime.now()
-    inactive_users = [
-        user for user, data in short_term_memory.items()
-        if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)
-    ]
+    inactive_users = [user for user, data in short_term_memory.items() if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)]
     for user in inactive_users:
         print(f"Usuário {user} inativo. Sumarizando e salvando memória...")
         user_memory = short_term_memory.pop(user)
@@ -67,13 +49,12 @@ def process_message(sock, raw_message):
         msg_lower = message_content.lower()
         learn_command = "!learn "
         if msg_lower.startswith(learn_command):
-            # ... (lógica do !learn inalterada) ...
             if user_permission == 'master':
                 fact_to_learn = message_content[len(learn_command):].strip()
                 if fact_to_learn:
                     success = database_handler.add_lorebook_entry(fact_to_learn, user_info)
                     if success: LOREBOOK.append(fact_to_learn); send_chat_message(sock, f"@{user_info} Entendido.")
-                    else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
+                    else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender.")
             else: send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
             return
 
@@ -88,20 +69,10 @@ def process_message(sock, raw_message):
 
         if is_activated and question:
             long_term_memories = database_handler.search_long_term_memory(user_info)
+            web_context = gemini_handler.web_search(question)
             user_memory = short_term_memory.get(user_info, {"history": []})
-            
-            # Chamada simplificada novamente. A complexidade está no gemini_handler.
-            ai_response = gemini_handler.generate_response(
-                question, 
-                user_memory['history'], 
-                BOT_SETTINGS, 
-                LOREBOOK, 
-                long_term_memories
-            )
-            
+            ai_response = gemini_handler.generate_response(question, user_memory['history'], BOT_SETTINGS, LOREBOOK, long_term_memories, web_context)
             send_chat_message(sock, f"@{user_info} {ai_response}")
-            
-            # ... (lógica de atualização de memória de curto prazo inalterada) ...
             user_memory['history'].append({'role': 'user', 'parts': [question]})
             user_memory['history'].append({'role': 'model', 'parts': [ai_response]})
             user_memory['last_interaction'] = datetime.now()
@@ -112,7 +83,6 @@ def process_message(sock, raw_message):
         print(f"Erro ao processar mensagem: {e}")
 
 def listen_for_messages(sock):
-    # Inalterado
     buffer = ""; last_cleanup = time.time()
     while True:
         try:
@@ -129,20 +99,11 @@ def listen_for_messages(sock):
             print(f"Erro no loop de escuta: {e}"); time.sleep(5)
 
 def main():
-    # ... (validação de .env inalterada) ...
     global BOT_SETTINGS, LOREBOOK
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS:
         print("ERRO CRÍTICO: Não foi possível carregar as configurações do bot."); return
-    
-    # MUDANÇA: Passa a configuração de busca para o loader do modelo
-    use_native_search = BOT_SETTINGS.get('use_native_google_search', True)
-    gemini_handler.load_interaction_model(
-        BOT_SETTINGS.get('interaction_model', 'gemini-1.5-flash'),
-        use_native_search
-    )
-
-    # ... (resto do código de conexão e loop principal inalterado) ...
+    gemini_handler.load_interaction_model(BOT_SETTINGS.get('interaction_model', 'gemini-1.5-flash'))
     if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED:
         print("O bot não pode iniciar devido a um erro na inicialização de um módulo."); return
     sock = socket.socket()
@@ -153,10 +114,7 @@ def main():
         sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
-        
-        search_mode = "Nativa (Google)" if use_native_search else "Fallback (DDGS)"
-        send_chat_message(sock, f"AI_Yuh (v1.9.0) online. Modo de busca: {search_mode}.")
-        
+        send_chat_message(sock, f"AI_Yuh (v1.6.1-compat) online. Modo de busca: DDGS.")
         listen_for_messages(sock)
     except Exception as e:
         print(f"Erro fatal na conexão: {e}")
