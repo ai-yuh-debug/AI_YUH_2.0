@@ -5,7 +5,7 @@
 # FASE 8: O Painel de Controle
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.0.0
+# Versão: 1.0.1 (Correção do dotenv)
 # Data: 26/08/2025
 #
 # Descrição: Uma aplicação web construída com Streamlit para gerenciar
@@ -19,6 +19,11 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
+# --- CORREÇÃO: Carrega as variáveis de ambiente ANTES de qualquer outra coisa ---
+from dotenv import load_dotenv
+load_dotenv()
+# --------------------------------------------------------------------------
+
 # Importa o cliente supabase já configurado do nosso handler
 # Isso garante que estamos usando as mesmas credenciais do bot
 from database_handler import supabase_client, DB_ENABLED
@@ -30,6 +35,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# O restante do arquivo permanece EXATAMENTE O MESMO
+# ... (todo o resto do seu código do painel) ...
 
 # --- Funções de Interação com o Banco de Dados ---
 # (Algumas funções são específicas para o painel para lidar com o cache do Streamlit)
