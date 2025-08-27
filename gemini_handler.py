@@ -2,27 +2,29 @@
 # =========================================================================================
 #                   AI_YUH - Módulo de Gerenciamento da IA
 # =========================================================================================
-# FASE 10: Versão de Compatibilidade Final
+# FASE 10: Configurações de IA Detalhadas (Com API Correta)
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.8.1 (Removendo safety_settings das chamadas de geração)
+# Versão: 1.5.1
 # Data: 26/08/2025
 #
-# Descrição: Adaptação final para a biblioteca google-generativeai==0.8.5.
-#            Remove a passagem explícita de safety_settings das chamadas de
-#            geração, pois a v0.8.5 parece ter problemas com isso.
+# Descrição: Esta é a versão final do gemini_handler.py que usa a biblioteca
+#            google-generativeai==0.10.0 (ou superior) e inclui a sintaxe
+#            correta para configurar os filtros de segurança e parâmetros.
+#            REQUER PYTHON >= 3.9
 #
 # =========================================================================================
 
 import os
 import google.generativeai as genai
+from google.generativeai.types import Tool # ESSENCIAL para v0.10.0+
 from ddgs import DDGS
 
 GEMINI_ENABLED = False
 interaction_model = None
 summarizer_model = None
 
-# Mantemos a definição, mas não a passaremos mais para o modelo
+# Configurações de segurança: Tentando a máxima permissividade que a API permite
 safety_settings = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -36,19 +38,20 @@ try:
     print("Módulo Gemini inicializado.")
     GEMINI_ENABLED = True
 except Exception as e:
-    print(f"ERRO CRÍTICO: Não foi possível inicializar o módulo Gemini. Erro: {e}")
+    print(f"ERRO CRÍTICO: Não foi possível inicializar o módulo Gemini. Verifique sua API Key. Erro: {e}")
 
 def load_models_from_settings(settings: dict):
+    """Carrega ambos os modelos de IA com base nas configurações do DB."""
     global interaction_model, summarizer_model
     try:
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash')
         
-        # Inicializamos os modelos sem passar safety_settings aqui também
-        interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
+        # Na v0.10.0+, o safety_settings é passado na inicialização do modelo
+        interaction_model = genai.GenerativeModel(model_name=interaction_model_name, safety_settings=safety_settings)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")
         
-        summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
+        summarizer_model = genai.GenerativeModel(model_name=archivist_model_name, safety_settings=safety_settings)
         print(f"Modelo arquivista '{archivist_model_name}' carregado.")
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
@@ -74,50 +77,48 @@ def _build_base_prompt(settings: dict, lorebook: list, long_term_memories: list,
         prompt_text += f"{msg['role']}: {msg['parts'][0]}\n"
     return prompt_text
 
-def _generate_response(prompt: str, settings: dict) -> str:
-    """Função auxiliar unificada para gerar respostas."""
-    try:
-        chat = interaction_model.start_chat(history=[])
-        
-        config = genai.types.GenerationConfig(
-            temperature=float(settings.get('temperature', 0.9)),
-            top_p=float(settings.get('top_p', 1.0)),
-            top_k=int(settings.get('top_k', 1)),
-            max_output_tokens=int(settings.get('max_output_tokens', 256))
-        )
-        
-        # --- MODIFICAÇÃO: Removendo o parâmetro safety_settings da chamada send_message ---
-        response = chat.send_message(prompt, generation_config=config)
-        
-        if not response.parts:
-            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança (sem override).")
-            return "Minha resposta foi bloqueada pelos meus filtros de segurança principais. Por favor, tente outro assunto."
-        
-        return response.text.replace('*', '').replace('`', '').strip()
-    except Exception as e:
-        if "response.text" in str(e) and "none were returned" in str(e):
-             print("AVISO: A resposta da IA foi bloqueada por filtros de segurança (capturado por exceção).")
-             return "Minha resposta foi bloqueada pelos meus filtros de segurança. Tente reformular a pergunta."
-        print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
-
 def generate_response_without_search(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Cérebro offline."
-    prompt = _build_base_prompt(settings, lorebook, long_term_memories, history, hierarchical_memories) + f"user: {question}\nmodel:"
-    return _generate_response(prompt, settings)
+    try:
+        prompt = _build_base_prompt(settings, lorebook, long_term_memories, history, hierarchical_memories) + f"user: {question}\nmodel:"
+        config = genai.types.GenerationConfig(temperature=float(settings.get('temperature',0.9)), top_p=float(settings.get('top_p',1.0)), top_k=int(settings.get('top_k',1)), max_output_tokens=int(settings.get('max_output_tokens',256)))
+        
+        # A v0.10.0+ espera safety_settings na inicialização do modelo, não aqui.
+        response = interaction_model.generate_content(prompt, generation_config=config)
+        
+        if not response.parts:
+            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança fundamentais.")
+            return "Minha resposta para este tópico específico foi bloqueada pelos meus filtros de segurança principais. Por favor, tente outro assunto."
+            
+        return response.text.replace('*', '').replace('`', '').strip()
+    except Exception as e:
+        print(f"Erro na geração (sem busca): {e}"); return "Ocorreu um erro ao pensar."
 
 def generate_response_with_search(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, web_context: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Cérebro offline."
-    prompt = _build_base_prompt(settings, lorebook, long_term_memories, history, hierarchical_memories)
-    if web_context: prompt += f"{web_context}\n\n"
-    prompt += f"user: {question}\nmodel:"
-    return _generate_response(prompt, settings)
+    try:
+        prompt = _build_base_prompt(settings, lorebook, long_term_memories, history, hierarchical_memories)
+        if web_context: prompt += f"{web_context}\n\n"
+        prompt += f"user: {question}\nmodel:"
+        config = genai.types.GenerationConfig(temperature=float(settings.get('temperature',0.9)), top_p=float(settings.get('top_p',1.0)), top_k=int(settings.get('top_k',1)), max_output_tokens=int(settings.get('max_output_tokens',256)))
+        
+        # A v0.10.0+ espera safety_settings na inicialização do modelo, não aqui.
+        response = interaction_model.generate_content(prompt, generation_config=config)
+
+        if not response.parts:
+            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança fundamentais.")
+            return "Minha resposta para este tópico específico foi bloqueada pelos meus filtros de segurança principais. Por favor, tente outro assunto."
+
+        return response.text.replace('*', '').replace('`', '').strip()[:int(settings.get('max_output_tokens',256))]
+    except Exception as e:
+        print(f"Erro na geração (com busca): {e}"); return "Ocorreu um erro ao pensar."
 
 def summarize_conversation(conversation_history):
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Sumarização indisponível."
     try:
         transcript = "\n".join(f"{msg['role']}: {msg['parts'][0]}" for msg in conversation_history)
         prompt = f"Resuma os pontos principais da conversa a seguir em uma frase impessoal:\n\n{transcript}\n\nResumo:"
-        # --- MODIFICAÇÃO: Removendo o parâmetro safety_settings da chamada generate_content ---
+        # Na v0.10.0+ o safety_settings é passado na inicialização do modelo, não aqui.
         response = summarizer_model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
@@ -127,7 +128,7 @@ def summarize_global_chat(chat_transcript: str) -> str:
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Modelo arquivista indisponível."
     try:
         prompt = f"A seguir está uma transcrição do chat de uma live. Resuma os eventos, piadas e tópicos mais importantes. Ignore spam.\n\n{chat_transcript}\n\nResumo dos Eventos:"
-        # --- MODIFICAÇÃO: Removendo o parâmetro safety_settings da chamada generate_content ---
+        # Na v0.10.0+ o safety_settings é passado na inicialização do modelo, não aqui.
         response = summarizer_model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
