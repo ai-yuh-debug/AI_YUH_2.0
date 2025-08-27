@@ -1,3 +1,6 @@
+# Versão congelada para compatibilidade máxima (Python < 3.9)
+# Usa DDGS como único método de busca na web.
 python-dotenv
-google-generativeai
-supabase 
+google-generativeai==0.8.5
+supabase
+ddgs
