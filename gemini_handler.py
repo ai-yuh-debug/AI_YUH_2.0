@@ -5,12 +5,12 @@
 # FASE 10: Versão de Compatibilidade Final
 #
 # Autor: Seu Nome/Apelido
-# Versão: 1.8.0 (Compatibilidade com v0.8.5)
+# Versão: 1.8.1 (Removendo safety_settings das chamadas de geração)
 # Data: 26/08/2025
 #
-# Descrição: Código refatorado para ser 100% compatível com a biblioteca
-#            google-generativeai==0.8.5, removendo configurações complexas
-#            que causam conflitos de segurança.
+# Descrição: Adaptação final para a biblioteca google-generativeai==0.8.5.
+#            Remove a passagem explícita de safety_settings das chamadas de
+#            geração, pois a v0.8.5 parece ter problemas com isso.
 #
 # =========================================================================================
 
@@ -22,10 +22,7 @@ GEMINI_ENABLED = False
 interaction_model = None
 summarizer_model = None
 
-# Configurações de segurança simplificadas para a v0.8.5
-# Vamos usar o padrão da biblioteca antiga, que é não definir nada
-# e deixar a API lidar com isso, ou usar o formato antigo se necessário.
-# Por enquanto, vamos remover a passagem explícita na inicialização.
+# Mantemos a definição, mas não a passaremos mais para o modelo
 safety_settings = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -47,8 +44,7 @@ def load_models_from_settings(settings: dict):
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash')
         
-        # Na v0.8.5, passar os safety_settings na inicialização pode ser problemático.
-        # Vamos inicializar de forma mais simples.
+        # Inicializamos os modelos sem passar safety_settings aqui também
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")
         
@@ -58,7 +54,6 @@ def load_models_from_settings(settings: dict):
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
 def web_search(query: str, num_results: int = 3) -> str:
-    # ... (função web_search inalterada) ...
     print(f"Realizando busca na web (DDGS) por: '{query}'")
     try:
         results = DDGS().text(query, max_results=num_results)
@@ -68,7 +63,6 @@ def web_search(query: str, num_results: int = 3) -> str:
         print(f"Erro na busca da web: {e}"); return ""
 
 def _build_base_prompt(settings: dict, lorebook: list, long_term_memories: list, history: list, hierarchical_memories: list) -> str:
-    # ... (função _build_base_prompt inalterada) ...
     prompt_text = settings.get('personality_prompt', '') + "\n\n"
     if lorebook:
         prompt_text += f"{settings.get('lorebook_prompt', '')}\n" + "\n".join(f"- {fact}" for fact in lorebook) + "\n\n"
@@ -83,8 +77,6 @@ def _build_base_prompt(settings: dict, lorebook: list, long_term_memories: list,
 def _generate_response(prompt: str, settings: dict) -> str:
     """Função auxiliar unificada para gerar respostas."""
     try:
-        # A v0.8.5 usa um método de inicialização de chat mais simples
-        # e passa a configuração de geração na chamada send_message.
         chat = interaction_model.start_chat(history=[])
         
         config = genai.types.GenerationConfig(
@@ -94,16 +86,15 @@ def _generate_response(prompt: str, settings: dict) -> str:
             max_output_tokens=int(settings.get('max_output_tokens', 256))
         )
         
-        # A v0.8.5 pode precisar que os safety_settings sejam passados aqui
-        response = chat.send_message(prompt, generation_config=config, safety_settings=safety_settings)
+        # --- MODIFICAÇÃO: Removendo o parâmetro safety_settings da chamada send_message ---
+        response = chat.send_message(prompt, generation_config=config)
         
         if not response.parts:
-            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança.")
-            return "Minha resposta para este tópico específico foi bloqueada pelos meus filtros de segurança principais. Por favor, tente outro assunto."
+            print("AVISO: A resposta da IA foi bloqueada por filtros de segurança (sem override).")
+            return "Minha resposta foi bloqueada pelos meus filtros de segurança principais. Por favor, tente outro assunto."
         
         return response.text.replace('*', '').replace('`', '').strip()
     except Exception as e:
-        # O erro 'Invalid operation' pode ser capturado aqui
         if "response.text" in str(e) and "none were returned" in str(e):
              print("AVISO: A resposta da IA foi bloqueada por filtros de segurança (capturado por exceção).")
              return "Minha resposta foi bloqueada pelos meus filtros de segurança. Tente reformular a pergunta."
@@ -126,7 +117,8 @@ def summarize_conversation(conversation_history):
     try:
         transcript = "\n".join(f"{msg['role']}: {msg['parts'][0]}" for msg in conversation_history)
         prompt = f"Resuma os pontos principais da conversa a seguir em uma frase impessoal:\n\n{transcript}\n\nResumo:"
-        response = summarizer_model.generate_content(prompt, safety_settings=safety_settings)
+        # --- MODIFICAÇÃO: Removendo o parâmetro safety_settings da chamada generate_content ---
+        response = summarizer_model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         print(f"Erro ao sumarizar conversa: {e}"); return "Erro de sumarização."
@@ -135,7 +127,8 @@ def summarize_global_chat(chat_transcript: str) -> str:
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Modelo arquivista indisponível."
     try:
         prompt = f"A seguir está uma transcrição do chat de uma live. Resuma os eventos, piadas e tópicos mais importantes. Ignore spam.\n\n{chat_transcript}\n\nResumo dos Eventos:"
-        response = summarizer_model.generate_content(prompt, safety_settings=safety_settings)
+        # --- MODIFICAÇÃO: Removendo o parâmetro safety_settings da chamada generate_content ---
+        response = summarizer_model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         print(f"Erro ao sumarizar chat global: {e}"); return "Erro de sumarização global."
