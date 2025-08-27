@@ -62,35 +62,28 @@ def _generate_response(question: str, history: list, settings: dict, lorebook: l
     try:
         full_history = []
         
-        # --- REATIVAÇÃO DE TODAS AS CAMADAS DE MEMÓRIA ---
-        # 1. Injeção de personalidade e contextos como mensagens de sistema
         full_history.append({'role': 'user', 'parts': [settings.get('personality_prompt', '')]})
         full_history.append({'role': 'model', 'parts': ["Entendido. Assumirei essa personalidade e seguirei todas as instruções a seguir."]})
         
-        # 2. Reativação do Lorebook
         if lorebook:
             lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
             full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
             full_history.append({'role': 'model', 'parts': ["Compreendido."]})
 
-        # 3. Reativação da Memória Pessoal
         if long_term_memories:
             memories_text = "\n".join(f"- {mem}" for mem in long_term_memories)
             full_history.append({'role': 'user', 'parts': [f"Resumos de conversas passadas comigo:\n{memories_text}"]})
             full_history.append({'role': 'model', 'parts': ["Ok."]})
         
-        # 4. Reativação da Memória Hierárquica
         if hierarchical_memories:
             hier_mem_text = "\n".join(f"- {mem}" for mem in hierarchical_memories)
             full_history.append({'role': 'user', 'parts': [f"Resumos de eventos recentes no chat:\n{hier_mem_text}"]})
             full_history.append({'role': 'model', 'parts': ["Ok."]})
             
-        # 5. Adiciona o contexto da web, se houver
         if web_context:
             full_history.append({'role': 'user', 'parts': [web_context]})
             full_history.append({'role': 'model', 'parts': ["Obrigado pelo contexto da web."]})
 
-        # 6. Adiciona o histórico da conversa atual
         full_history.extend(history)
         
         chat = interaction_model.start_chat(history=full_history)
@@ -109,14 +102,12 @@ def _generate_response(question: str, history: list, settings: dict, lorebook: l
              return "Minha resposta foi bloqueada."
         print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
 
-# --- As funções de geração agora chamam a função unificada com todos os parâmetros ---
 def generate_response_without_search(question, history, settings, lorebook, long_term_memories, hierarchical_memories):
     return _generate_response(question, history, settings, lorebook, long_term_memories, hierarchical_memories, "")
 
 def generate_response_with_search(question, history, settings, lorebook, long_term_memories, hierarchical_memories, web_context):
     return _generate_response(question, history, settings, lorebook, long_term_memories, hierarchical_memories, web_context)
     
-# ... (funções de sumarização inalteradas) ...
 def summarize_conversation(conversation_history):
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Sumarização indisponível."
     try:

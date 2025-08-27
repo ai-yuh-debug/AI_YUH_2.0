@@ -51,7 +51,7 @@ def save_long_term_memory(username: str, summary: str):
     if not DB_ENABLED: return
     try:
         supabase_client.table('long_term_memory').insert({"username": username, "summary": summary}).execute()
-        print(f"Memória pessoal salva para {user}.")
+        print(f"Memória pessoal salva para {username}.")
     except Exception as e:
         print(f"Erro ao salvar memória pessoal para {username}: {e}")
 
@@ -80,7 +80,6 @@ def search_hierarchical_memory(limit: int = 3) -> list[str]:
         print(f"Erro ao buscar memória hierárquica: {e}"); return []
 
 def get_memories_for_consolidation(level: str, start_time: datetime, end_time: datetime) -> list:
-    """Busca memórias de um nível específico dentro de um período de tempo."""
     if not DB_ENABLED: return []
     try:
         response = supabase_client.table('hierarchical_memory').select("id, summary").eq("memory_level", level).gte("created_at", start_time.isoformat()).lte("created_at", end_time.isoformat()).execute()
@@ -89,10 +88,19 @@ def get_memories_for_consolidation(level: str, start_time: datetime, end_time: d
         print(f"Erro ao buscar memórias '{level}' para consolidação: {e}"); return []
 
 def delete_memories_by_ids(ids: list):
-    """Deleta memórias da tabela hierárquica com base em uma lista de IDs."""
     if not DB_ENABLED or not ids: return
     try:
         supabase_client.table('hierarchical_memory').delete().in_('id', ids).execute()
         print(f"Memórias antigas (IDs: {ids}) deletadas com sucesso.")
     except Exception as e:
         print(f"Erro ao deletar memórias antigas: {e}")
+        
+def get_current_lorebook() -> list[str]:
+    """Busca o estado mais recente do lorebook no banco de dados."""
+    if not DB_ENABLED: return []
+    try:
+        response = supabase_client.table('lorebook').select("entry").execute()
+        return [item['entry'] for item in response.data]
+    except Exception as e:
+        print(f"Erro ao buscar o lorebook atual: {e}")
+        return []

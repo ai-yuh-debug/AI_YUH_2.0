@@ -19,7 +19,7 @@ TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
 HOST = "irc.chat.twitch.tv"
 PORT = 6667
 BOT_SETTINGS = {}
-LOREBOOK = []
+LOREBOOK = [] # MODIFICAÇÃO: A variável global ainda existe, mas será atualizada
 short_term_memory = {}
 global_chat_buffer = []
 GLOBAL_BUFFER_MAX_MESSAGES = 40
@@ -29,39 +29,30 @@ MAX_HISTORY_LENGTH = 10
 UNCERTAINTY_KEYWORDS = ["não sei", "nao sei", "não tenho acesso", "desconheço", "não consigo encontrar"]
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 
-# --- Motor do Agendador de Memória ---
 def run_scheduler():
     print(f"[{datetime.now(TIMEZONE).strftime('%H:%M:%S')}] Agendador de memória iniciado em uma thread de fundo.")
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-# --- Funções de Consolidação de Memória ---
 def consolidate_daily_memories():
-    print(f"[{datetime.now(TIMEZONE).strftime('%H:%M')}] AGENDADOR: Verificando memórias 'transfer' para consolidar em 'daily'.")
+    print(f"[{datetime.now(TIMEZONE).strftime('%H:%M')}] AGENDADOR: Verificando memórias 'transfer'.")
     today = datetime.now(TIMEZONE).date()
     yesterday = today - timedelta(days=1)
-    
     start_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.min.time()))
     end_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.max.time()))
-    
     memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer", start_of_yesterday, end_of_yesterday)
-    
     if not memories_to_consolidate:
         print("AGENDADOR: Nenhuma memória 'transfer' de ontem para consolidar.")
         return
-        
-    print(f"AGENDADOR: Encontradas {len(memories_to_consolidate)} memórias 'transfer' de ontem. Sumarizando...")
+    print(f"AGENDADOR: Encontradas {len(memories_to_consolidate)} memórias. Sumarizando...")
     full_text = "\n".join([mem['summary'] for mem in memories_to_consolidate])
-    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia em um parágrafo conciso:\n{full_text}")
-    
+    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia:\n{full_text}")
     metadata = {"date": yesterday.isoformat()}
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    
     ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
     database_handler.delete_memories_by_ids(ids_to_delete)
 
-# --- Funções do Bot ---
 def send_chat_message(sock, message):
     try: sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
     except Exception as e: print(f"Erro ao enviar mensagem: {e}")
@@ -69,7 +60,7 @@ def send_chat_message(sock, message):
 def summarize_and_clear_global_buffer():
     global global_chat_buffer
     if not global_chat_buffer: return
-    print(f"Buffer de transferência atingiu o limite. Sumarizando {len(global_chat_buffer)} mensagens...")
+    print(f"Buffer de transferência atingiu o limite: {len(global_chat_buffer)} mensagens.")
     transcript = "\n".join(f"{msg['user']}: {msg['content']}" for msg in global_chat_buffer)
     summary = gemini_handler.summarize_global_chat(transcript)
     database_handler.save_hierarchical_memory("transfer", summary)
@@ -100,15 +91,19 @@ def process_message(sock, raw_message):
 
         msg_lower = message_content.lower()
         
-        # --- LÓGICA DE INTERAÇÃO RESTAURADA ---
         learn_command = "!learn "
         if msg_lower.startswith(learn_command):
             if user_permission == 'master':
                 fact = message_content[len(learn_command):].strip()
                 if fact and database_handler.add_lorebook_entry(fact, user_info):
-                    LOREBOOK.append(fact); send_chat_message(sock, f"@{user_info} Entendido.")
-                else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender.")
-            else: send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
+                    # MODIFICAÇÃO: Atualiza a variável global após salvar no DB
+                    global LOREBOOK
+                    LOREBOOK = database_handler.get_current_lorebook()
+                    send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
+                else:
+                    send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
+            else:
+                send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
             return
 
         activation_ask = "!ask "; activation_mention = f"@{BOT_NICK} "
@@ -117,6 +112,7 @@ def process_message(sock, raw_message):
         elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
 
         if is_activated and question:
+            # MODIFICAÇÃO: Usa a variável global LOREBOOK, que agora é atualizada.
             long_term_memories = database_handler.search_long_term_memory(user_info)
             hierarchical_memories = database_handler.search_hierarchical_memory()
             user_memory = short_term_memory.get(user_info, {"history": []})
@@ -140,17 +136,20 @@ def process_message(sock, raw_message):
             user_memory['last_interaction'] = datetime.now()
             if len(user_memory['history']) > MAX_HISTORY_LENGTH: user_memory['history'] = user_memory['history'][2:]
             short_term_memory[user_info] = user_memory
-        # --- FIM DA LÓGICA DE INTERAÇÃO ---
             
     except Exception as e:
         print(f"Erro ao processar mensagem: {e}")
 
 def listen_for_messages(sock):
-    buffer = ""
+    buffer = ""; last_cleanup = time.time(); last_global_summary = time.time()
     while True:
         try:
+            now = time.time()
+            if now - last_cleanup > 60: cleanup_inactive_memory(); last_cleanup = now
+            if len(global_chat_buffer) >= GLOBAL_BUFFER_MAX_MESSAGES or now - last_global_summary > (GLOBAL_BUFFER_MAX_MINUTES * 60):
+                summarize_and_clear_global_buffer(); last_global_summary = now
+            
             buffer += sock.recv(2048).decode('utf-8', errors='ignore')
-            # CORREÇÃO CRÍTICA: O separador de linha do IRC é \r\n
             messages = buffer.split('\r\n'); buffer = messages.pop()
             for raw_message in messages:
                 if not raw_message: continue
@@ -160,13 +159,13 @@ def listen_for_messages(sock):
             print(f"Erro no loop de escuta: {e}"); time.sleep(5)
 
 def main():
-    global BOT_SETTINGS, LOREBOOK
+    global BOT_SETTINGS, LOREBOOK # MODIFICAÇÃO: LOREBOOK precisa ser global
+    # A variável LOREBOOK agora é carregada na inicialização
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS: print("ERRO CRÍTICO: Não foi possível carregar as configurações."); return
     gemini_handler.load_models_from_settings(BOT_SETTINGS)
     if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED: print("O bot não pode iniciar."); return
     
-    # Configuração e Início do Agendador
     schedule.every(GLOBAL_BUFFER_MAX_MINUTES).minutes.do(summarize_and_clear_global_buffer)
     schedule.every().day.at("00:00", str(TIMEZONE)).do(consolidate_daily_memories)
     
@@ -174,7 +173,6 @@ def main():
     scheduler_thread.daemon = True
     scheduler_thread.start()
     
-    # Conexão e Loop Principal do Bot
     sock = socket.socket()
     try:
         print("Conectando ao servidor IRC da Twitch...")
@@ -183,7 +181,7 @@ def main():
         sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
-        send_chat_message(sock, f"AI_Yuh (v2.2.1-scheduler-fix) online. Agendador de memória ativado.")
+        send_chat_message(sock, f"AI_Yuh (v2.3.1-hotfix) online. Sincronização com DB corrigida.")
         listen_for_messages(sock)
     except Exception as e:
         print(f"Erro fatal na conexão: {e}")
