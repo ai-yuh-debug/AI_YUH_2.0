@@ -19,7 +19,7 @@ TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
 HOST = "irc.chat.twitch.tv"
 PORT = 6667
 BOT_SETTINGS = {}
-LOREBOOK = [] # MODIFICAÇÃO: A variável global ainda existe, mas será atualizada
+LOREBOOK = [] # A variável global continua aqui
 short_term_memory = {}
 global_chat_buffer = []
 GLOBAL_BUFFER_MAX_MESSAGES = 40
@@ -96,9 +96,10 @@ def process_message(sock, raw_message):
             if user_permission == 'master':
                 fact = message_content[len(learn_command):].strip()
                 if fact and database_handler.add_lorebook_entry(fact, user_info):
-                    # MODIFICAÇÃO: Atualiza a variável global após salvar no DB
+                    # --- A CORREÇÃO ESTÁ AQUI ---
                     global LOREBOOK
-                    LOREBOOK = database_handler.get_current_lorebook()
+                    LOREBOOK = database_handler.get_current_lorebook() # Atualiza a "foto"
+                    # ---------------------------
                     send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
                 else:
                     send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
@@ -112,7 +113,7 @@ def process_message(sock, raw_message):
         elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
 
         if is_activated and question:
-            # MODIFICAÇÃO: Usa a variável global LOREBOOK, que agora é atualizada.
+            # Não precisamos mudar nada aqui, pois ele usará a variável global LOREBOOK que agora é atualizada
             long_term_memories = database_handler.search_long_term_memory(user_info)
             hierarchical_memories = database_handler.search_hierarchical_memory()
             user_memory = short_term_memory.get(user_info, {"history": []})
@@ -159,8 +160,8 @@ def listen_for_messages(sock):
             print(f"Erro no loop de escuta: {e}"); time.sleep(5)
 
 def main():
-    global BOT_SETTINGS, LOREBOOK # MODIFICAÇÃO: LOREBOOK precisa ser global
-    # A variável LOREBOOK agora é carregada na inicialização
+    global BOT_SETTINGS, LOREBOOK
+    # A variável LOREBOOK é carregada na inicialização, como no seu código
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS: print("ERRO CRÍTICO: Não foi possível carregar as configurações."); return
     gemini_handler.load_models_from_settings(BOT_SETTINGS)
