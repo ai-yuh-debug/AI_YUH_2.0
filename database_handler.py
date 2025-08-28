@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
 
@@ -34,7 +34,9 @@ def get_user_permission(username: str) -> str:
     if not DB_ENABLED: return 'normal'
     try:
         user_response = supabase_client.table('users').select("permission_level").eq("twitch_username", username.lower()).execute()
-        return user_response.data[0]['permission_level'] if user_response.data else 'normal'
+        if user_response.data:
+            return user_response.data[0]['permission_level']
+        return 'normal'
     except Exception as e:
         print(f"Erro ao verificar permissão para {username}: {e}"); return 'normal'
 
@@ -113,10 +115,7 @@ def delete_lorebook_entry(entry_id: int):
 def update_bot_status(status: str):
     if not DB_ENABLED: return
     try:
-        supabase_client.table('bot_status').update({
-            "status_value": status,
-            "last_updated": datetime.now(pytz.utc).isoformat()
-        }).eq("status_key", "bot_state").execute()
+        supabase_client.table('bot_status').update({"status_value": status, "last_updated": datetime.now(pytz.utc).isoformat()}).eq("status_key", "bot_state").execute()
     except Exception as e:
         pass
 
@@ -132,4 +131,15 @@ def add_live_chat_message(username: str, message: str):
     try:
         supabase_client.table('live_chat').insert({"username": username, "message": message}).execute()
     except Exception as e:
+        pass
+        
+def update_bot_thought(thought: str):
+    """Atualiza o último 'pensamento' do bot no DB."""
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('bot_status').update({
+            "status_value": thought,
+            "last_updated": datetime.now(pytz.utc).isoformat()
+        }).eq("status_key", "last_thought").execute()
+    except Exception:
         pass

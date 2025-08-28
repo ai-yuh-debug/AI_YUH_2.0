@@ -2,6 +2,7 @@
 import os
 import socket
 import time
+import re
 from datetime import datetime, timedelta
 import threading
 import schedule
@@ -19,7 +20,6 @@ TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
 HOST = "irc.chat.twitch.tv"
 PORT = 6667
 BOT_SETTINGS = {}
-LOREBOOK = []
 short_term_memory = {}
 global_chat_buffer = []
 GLOBAL_BUFFER_MAX_MESSAGES = 40
@@ -67,8 +67,7 @@ def summarize_and_clear_global_buffer():
     chat_buffer_copy = list(global_chat_buffer)
     global_chat_buffer = []
     if not chat_buffer_copy: return
-    
-    print(f"Buffer global atingiu o limite. Sumarizando {len(chat_buffer_copy)} mensagens...")
+    print(f"Buffer de transferência atingiu o limite. Sumarizando {len(chat_buffer_copy)} mensagens...")
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Iniciando. {len(chat_buffer_copy)} mensagens.")
     transcript = "\n".join(f"{msg['user']}: {msg['content']}" for msg in chat_buffer_copy)
     summary = gemini_handler.summarize_global_chat(transcript)
@@ -90,17 +89,28 @@ def cleanup_inactive_memory():
             database_handler.save_long_term_memory(user, summary)
             database_handler.add_live_log("MEMÓRIA PESSOAL", f"Salvo para '{user}': '{summary[:50]}...'")
 
+def find_relevant_lore(question: str, full_lorebook: list) -> list[str]:
+    common_words = {'o', 'a', 'os', 'as', 'um', 'uma', 'de', 'do', 'da', 'em', 'no', 'na', 'com', 'por', 'para', 'que', 'quem', 'qual', 'como', 'onde'}
+    words = set(re.findall(r'\b\w{4,}\b', question.lower()))
+    keywords = words - common_words
+    if not keywords: return []
+    relevant_entries = []
+    for entry in full_lorebook:
+        for keyword in keywords:
+            if keyword in entry.lower():
+                relevant_entries.append(entry)
+                break
+    if relevant_entries: print(f"Lorebook: Encontradas {len(relevant_entries)} entradas relevantes para: {keywords}")
+    return relevant_entries
+
 def process_message(sock, raw_message):
     if "PRIVMSG" not in raw_message: return
     try:
         source, _, message_body = raw_message.partition('PRIVMSG')
         user_info = source.split('!')[0][1:]
         message_content = message_body.split(':', 1)[1].strip()
-        
         database_handler.add_live_chat_message(user_info, message_content)
-        
         if user_info.lower() == BOT_NICK: return
-        
         global_chat_buffer.append({"user": user_info, "content": message_content})
         user_permission = database_handler.get_user_permission(user_info)
         if user_permission == 'blacklist': return
@@ -112,8 +122,6 @@ def process_message(sock, raw_message):
             if user_permission == 'master':
                 fact = message_content[len(learn_command):].strip()
                 if fact and database_handler.add_lorebook_entry(fact, user_info):
-                    global LOREBOOK
-                    LOREBOOK = database_handler.get_current_lorebook()
                     send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
                 else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
             else: send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
@@ -125,20 +133,22 @@ def process_message(sock, raw_message):
         elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
 
         if is_activated and question:
-            database_handler.add_live_log("IA PENSANDO", f"'{user_info}' perguntou: '{question}'")
             current_lorebook = database_handler.get_current_lorebook()
+            relevant_lore = find_relevant_lore(question, current_lorebook)
             long_term_memories = database_handler.search_long_term_memory(user_info)
             hierarchical_memories = database_handler.search_hierarchical_memory()
             user_memory = short_term_memory.get(user_info, {"history": []})
             
-            initial_response = gemini_handler.generate_response_without_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories)
+            thought = f"Usuário: '{user_info}' | Pergunta: '{question}' | Contextos: Lorebook ({len(relevant_lore)}), Mem. Pessoal ({len(long_term_memories)}), Mem. Global ({len(hierarchical_memories)})"
+            database_handler.update_bot_thought(thought)
+            
+            initial_response = gemini_handler.generate_response_without_search(question, user_memory['history'], BOT_SETTINGS, relevant_lore, long_term_memories, hierarchical_memories)
             
             final_response = initial_response
             if any(keyword in initial_response.lower() for keyword in UNCERTAINTY_KEYWORDS):
-                database_handler.add_live_log("IA BUSCANDO", "Incerteza detectada. Buscando no DDGS.")
                 web_context = gemini_handler.web_search(question)
                 if web_context:
-                    final_response = gemini_handler.generate_response_with_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, web_context)
+                    final_response = gemini_handler.generate_response_with_search(question, user_memory['history'], BOT_SETTINGS, relevant_lore, long_term_memories, hierarchical_memories, web_context)
             send_chat_message(sock, f"@{user_info} {final_response}")
             
             user_memory['history'].append({'role': 'user', 'parts': [question]})
@@ -163,8 +173,8 @@ def listen_for_messages(sock):
             print(f"Erro no loop de escuta: {e}"); time.sleep(5)
 
 def main():
-    global BOT_SETTINGS, LOREBOOK
-    BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
+    global BOT_SETTINGS
+    BOT_SETTINGS, _ = database_handler.load_initial_data()
     if not BOT_SETTINGS: print("ERRO CRÍTICO: Não foi possível carregar as configurações."); return
     gemini_handler.load_models_from_settings(BOT_SETTINGS)
     if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED: print("O bot não pode iniciar."); return
@@ -185,7 +195,7 @@ def main():
         sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
-        send_chat_message(sock, f"AI_Yuh (v2.5.0-livelog) online.")
+        send_chat_message(sock, f"AI_Yuh (v2.6.0-pro-panel) online.")
         database_handler.add_live_log("STATUS", "Bot conectado com sucesso ao chat.")
         listen_for_messages(sock)
     except KeyboardInterrupt:
