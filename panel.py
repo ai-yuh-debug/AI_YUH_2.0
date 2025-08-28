@@ -2,25 +2,18 @@
 # =========================================================================================
 #                   AI_YUH - Painel de Controle (Streamlit)
 # =========================================================================================
-# FASE FINAL: Painel de Controle Profissional
-#
-# Autor: Seu Nome/Apelido
-# Versão: 2.0.0
-# Data: 26/08/2025
-#
-# Descrição: Uma aplicação web completa para gerenciar todas as facetas do
-#            AI_Yuh Bot, usando um layout de expanders para melhor organização.
-#
-# Para rodar: streamlit run panel.py
-# =========================================================================================
 
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry
+
+# Importamos nosso estado compartilhado para acessar a fila de logs
+import shared_state
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
@@ -33,6 +26,7 @@ def get_bot_status():
         return response.data.get('status_value', 'Desconhecido')
     except Exception: return "Desconhecido"
 
+# ... (todas as outras funções get_* permanecem exatamente iguais) ...
 @st.cache_data(ttl=60)
 def get_settings():
     try: return supabase_client.table('settings').select("*").limit(1).single().execute().data
@@ -64,17 +58,33 @@ st.title("🤖 Painel de Controle do AI_Yuh Bot")
 if not DB_ENABLED:
     st.error("ERRO GRAVE: Não foi possível conectar ao Supabase. Verifique o arquivo .env."); st.stop()
 
-# --- Seção de Atividade ao Vivo e Status ---
+# =========================================================================================
+#                      SEÇÃO DE LOGS AO VIVO MODIFICADA
+# =========================================================================================
 with st.container(border=True):
     st.subheader("Atividade ao Vivo e Status")
     bot_status = get_bot_status()
     status_color = {"Online": "green", "Offline": "red"}.get(bot_status, "gray")
     st.markdown(f"Status do Bot: <span style='color:{status_color}; font-weight:bold;'>{bot_status}</span>", unsafe_allow_html=True)
-    st.text_area("Chat da Twitch ao Vivo", "Recurso de chat ao vivo ainda não implementado...", height=200, disabled=True)
+
+    # Pega os logs da nossa fila compartilhada
+    # Usamos list() para criar uma cópia e garantir que a exibição seja consistente.
+    # A lista é invertida com [::-1] para que as mensagens mais recentes apareçam no topo.
+    log_entries = list(shared_state.log_queue)[::-1]
+    log_content = "\n".join(log_entries)
+    
+    st.text_area("Logs do Bot ao Vivo (últimas 100 linhas)", log_content, height=300, disabled=True)
+    
+    # Este pequeno truque força o Streamlit a recarregar a página a cada 5 segundos,
+    # atualizando assim a caixa de logs.
+    st.html("<meta http-equiv='refresh' content='5'>")
+# =========================================================================================
+
 
 # --- Seções de Configuração com Expanders ---
 settings = get_settings()
 if settings:
+    # ... (todo o resto do seu painel continua exatamente igual) ...
     with st.expander("⚙️ Configurações Gerais da IA"):
         with st.form("general_settings_form"):
             st.subheader("Personalidade e Modelo")
@@ -101,23 +111,25 @@ if settings:
                         'interaction_model': interaction_model, 'archivist_model': archivist_model,
                         'temperature': temp, 'top_p': top_p, 'top_k': top_k, 'max_output_tokens': max_tokens
                     }).eq('id', settings['id']).execute()
-                    st.success("Configurações Gerais salvas!"); st.cache_data.clear()
+                    st.success("Configurações Gerais salvas!"); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"Erro: {e}")
 
-    with st.expander("🧠 Configurações de Memória Generativa"):
-        with st.form("memory_form"):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                mem_exp = st.number_input("Expiração Mem. Pessoal (min)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
-            with col2:
-                glob_max_msg = st.number_input("Gatilho Sumarização (msgs)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
-            with col3:
-                glob_max_min = st.number_input("Gatilho Sumarização (min)", value=int(settings.get('global_buffer_max_minutes', 15)), min_value=1)
-            if st.form_submit_button("Salvar Configurações de Memória"):
-                try:
-                    supabase_client.table('settings').update({'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg, 'global_buffer_max_minutes': glob_max_min}).eq('id', settings['id']).execute()
-                    st.success("Configurações de Memória salvas!"); st.cache_data.clear()
-                except Exception as e: st.error(f"Erro: {e}")
+# ... (todo o resto do seu código do painel.py continua aqui) ...
+
+with st.expander("🧠 Configurações de Memória Generativa"):
+    with st.form("memory_form"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            mem_exp = st.number_input("Expiração Mem. Pessoal (min)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
+        with col2:
+            glob_max_msg = st.number_input("Gatilho Sumarização (msgs)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
+        with col3:
+            glob_max_min = st.number_input("Gatilho Sumarização (min)", value=int(settings.get('global_buffer_max_minutes', 15)), min_value=1)
+        if st.form_submit_button("Salvar Configurações de Memória"):
+            try:
+                supabase_client.table('settings').update({'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg, 'global_buffer_max_minutes': glob_max_min}).eq('id', settings['id']).execute()
+                st.success("Configurações de Memória salvas!"); st.cache_data.clear()
+            except Exception as e: st.error(f"Erro: {e}")
 
 with st.expander("👥 Gerenciar Usuários"):
     users_df = get_users()

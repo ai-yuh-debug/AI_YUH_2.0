@@ -3,9 +3,34 @@ import os
 import threading
 import time
 import logging
+from logging import Handler
+
+# Importamos nosso estado compartilhado
+import shared_state
+
+# ==============================================================================
+#                      NOVA CLASSE PARA CAPTURAR LOGS
+# ==============================================================================
+class QueueLogHandler(Handler):
+    """
+    Um manipulador de log personalizado que envia os logs para a nossa deque compartilhada.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def emit(self, record):
+        """
+        Esta função é chamada para cada mensagem de log gerada.
+        """
+        # Formata a mensagem de log e a adiciona à nossa fila.
+        log_entry = self.format(record)
+        shared_state.log_queue.append(log_entry)
+# ==============================================================================
 
 # Configuração do logger para este arquivo de inicialização
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(threadName)s] - %(levelname)s - %(message)s')
+# Formatamos para incluir o nome da thread, que é útil para depuração.
+log_format = '%(asctime)s [%(threadName)s] - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.INFO, format=log_format)
 
 # Importa a função principal do bot
 from main_bot import main as run_bot_main
@@ -20,6 +45,22 @@ def start_bot_thread():
     logging.info("A thread do bot foi finalizada.")
 
 if __name__ == "__main__":
+    # ==============================================================================
+    #             CONFIGURAÇÃO DO NOVO MANIPULADOR DE LOG
+    # ==============================================================================
+    # 1. Cria uma instância do nosso manipulador personalizado.
+    queue_handler = QueueLogHandler()
+    
+    # 2. Define o formato da mensagem para este manipulador.
+    formatter = logging.Formatter(log_format)
+    queue_handler.setFormatter(formatter)
+    
+    # 3. Adiciona nosso manipulador ao logger raiz.
+    # Agora, TODOS os logs gerados em qualquer lugar do nosso código
+    # serão enviados para a nossa fila, além de irem para o console.
+    logging.getLogger().addHandler(queue_handler)
+    # ==============================================================================
+
     # 1. Iniciar o bot em uma thread de fundo
     bot_thread = threading.Thread(target=start_bot_thread, name="BotThread", daemon=True)
     bot_thread.start()
@@ -32,8 +73,6 @@ if __name__ == "__main__":
     
     port = os.environ.get("PORT", 8501)
     
-    # Este é o comando que liga o seu PAINEL
     streamlit_command = f"streamlit run panel.py --server.port {port} --server.enableCORS false --server.enableXsrfProtection false"
     
-    # Executa o comando do painel. O programa ficará "preso" aqui, mantendo o painel vivo.
     os.system(streamlit_command)
