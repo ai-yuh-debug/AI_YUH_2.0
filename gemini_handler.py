@@ -1,128 +1,103 @@
-# -*- coding: utf-8 -*-
-# =========================================================================================
-#                   AI_YUH - Módulo de Gerenciamento da IA
-# =========================================================================================
-# FASE 11: Reativação de Todas as Camadas de Memória
-#
-# Autor: Seu Nome/Apelido
-# Versão: 1.8.3 (Final de Compatibilidade)
-# Data: 26/08/2025
-#
-# Descrição: Reintegra o Lorebook e as memórias de longo prazo/hierárquica
-#            dentro da nova estrutura de passagem de histórico, que se provou
-#            estável com a biblioteca v0.8.5.
-#
-# =========================================================================================
+# gemini_handler.py
 
 import os
 import google.generativeai as genai
-from ddgs import DDGS
+from duckduckgo_search import DDGS
+from dotenv import load_dotenv
 
-GEMINI_ENABLED = False
-interaction_model = None
-summarizer_model = None
+# Carrega as variáveis de ambiente e configura a API
+load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Configurações de segurança
 safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
 ]
 
-try:
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-    genai.configure(api_key=GEMINI_API_KEY)
-    print("Módulo Gemini inicializado.")
-    GEMINI_ENABLED = True
-except Exception as e:
-    print(f"ERRO CRÍTICO: Não foi possível inicializar o módulo Gemini. Erro: {e}")
-
-def load_models_from_settings(settings: dict):
-    global interaction_model, summarizer_model
+def get_generative_model(model_name: str):
+    """Cria e retorna uma instância de um modelo generativo."""
     try:
-        interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash')
-        archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash')
-        interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
-        print(f"Modelo de interação '{interaction_model_name}' carregado.")
-        summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
-        print(f"Modelo arquivista '{archivist_model_name}' carregado.")
+        return genai.GenerativeModel(
+            model_name=model_name,
+            safety_settings=safety_settings
+        )
     except Exception as e:
-        print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
+        print(f"Erro ao criar modelo {model_name}: {e}")
+        return None
 
-def web_search(query: str, num_results: int = 3) -> str:
-    print(f"Realizando busca na web (DDGS) por: '{query}'")
+def perform_search(query: str, max_results: int = 3):
+    """Executa uma pesquisa na web."""
     try:
-        results = DDGS().text(query, max_results=num_results)
-        if not results: return ""
-        return "Contexto da busca na web:\n" + "\n".join(f"- {res['body']}" for res in results)
-    except Exception as e:
-        print(f"Erro na busca da web: {e}"); return ""
-
-def _generate_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, web_context: str) -> str:
-    """Função unificada que usa a passagem de histórico via start_chat."""
-    try:
-        full_history = []
-        
-        full_history.append({'role': 'user', 'parts': [settings.get('personality_prompt', '')]})
-        full_history.append({'role': 'model', 'parts': ["Entendido. Assumirei essa personalidade e seguirei todas as instruções a seguir."]})
-        
-        if lorebook:
-            lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
-            full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
-            full_history.append({'role': 'model', 'parts': ["Compreendido."]})
-
-        if long_term_memories:
-            memories_text = "\n".join(f"- {mem}" for mem in long_term_memories)
-            full_history.append({'role': 'user', 'parts': [f"Resumos de conversas passadas comigo:\n{memories_text}"]})
-            full_history.append({'role': 'model', 'parts': ["Ok."]})
-        
-        if hierarchical_memories:
-            hier_mem_text = "\n".join(f"- {mem}" for mem in hierarchical_memories)
-            full_history.append({'role': 'user', 'parts': [f"Resumos de eventos recentes no chat:\n{hier_mem_text}"]})
-            full_history.append({'role': 'model', 'parts': ["Ok."]})
+        with DDGS() as ddgs:
+            results = [r for r in ddgs.text(query, max_results=max_results)]
+            if not results: return "Nenhum resultado encontrado na web."
             
-        if web_context:
-            full_history.append({'role': 'user', 'parts': [web_context]})
-            full_history.append({'role': 'model', 'parts': ["Obrigado pelo contexto da web."]})
-
-        full_history.extend(history)
-        
-        chat = interaction_model.start_chat(history=full_history)
-        
-        response = chat.send_message(question, safety_settings=safety_settings)
-        
-        if not response.parts:
-            print("AVISO: Resposta bloqueada por segurança.")
-            return "Minha resposta foi bloqueada. Tente outro assunto."
-            
-        return response.text.replace('*', '').replace('`', '').strip()
-        
+            formatted = "Resultados da pesquisa na web:\n"
+            for i, res in enumerate(results):
+                formatted += f"[{i+1}] Título: {res.get('title', 'N/A')}\n"
+                formatted += f"   Conteúdo: {res.get('body', 'N/A')}\n\n"
+            return formatted
     except Exception as e:
-        if "response.text" in str(e):
-             print("AVISO: Resposta bloqueada por segurança (exceção).")
-             return "Minha resposta foi bloqueada."
-        print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
+        print(f"Erro na busca DDGS: {e}")
+        return "Ocorreu um erro ao pesquisar na web."
 
-def generate_response_without_search(question, history, settings, lorebook, long_term_memories, hierarchical_memories):
-    return _generate_response(question, history, settings, lorebook, long_term_memories, hierarchical_memories, "")
-
-def generate_response_with_search(question, history, settings, lorebook, long_term_memories, hierarchical_memories, web_context):
-    return _generate_response(question, history, settings, lorebook, long_term_memories, hierarchical_memories, web_context)
-    
-def summarize_conversation(conversation_history):
-    if not GEMINI_ENABLED or not summarizer_model: return "Erro: Sumarização indisponível."
+def get_interaction_response(model, user_query: str, author: str, system_prompt: str, lorebook_context: str, memory_context: str = ""):
+    """Gera uma resposta para a interação do usuário no chat."""
     try:
-        transcript = "\n".join(f"{msg['role']}: {msg['parts'][0]}" for msg in conversation_history)
-        prompt = f"Resuma os pontos principais da conversa a seguir em uma frase impessoal:\n\n{transcript}\n\nResumo:"
-        response = summarizer_model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Erro ao sumarizar conversa: {e}"); return "Erro de sumarização."
+        decision_prompt = f"O usuário '{author}' perguntou: '{user_query}'. Preciso de informações atuais da internet para responder? Responda apenas 'SIM' ou 'NÃO'."
+        
+        decision_response = model.generate_content(decision_prompt)
+        decision = decision_response.text.strip().upper()
 
-def summarize_global_chat(chat_transcript: str) -> str:
-    if not GEMINI_ENABLED or not summarizer_model: return "Erro: Modelo arquivista indisponível."
-    try:
-        prompt = f"A seguir está uma transcrição do chat de uma live. Resuma os eventos, piadas e tópicos mais importantes. Ignore spam.\n\n{chat_transcript}\n\nResumo dos Eventos:"
-        response = summarizer_model.generate_content(prompt)
-        return response.text.strip()
+        search_results = ""
+        if "SIM" in decision:
+            print("IA decidiu pesquisar na web.")
+            search_results = perform_search(user_query)
+        else:
+            print("IA decidiu não pesquisar na web.")
+        
+        final_prompt = f"""
+        {system_prompt}
+
+        Contexto da memória de longo prazo (eventos passados):
+        {memory_context if memory_context else "Nenhuma memória de longo prazo disponível."}
+
+        Fatos importantes do Lorebook que você deve sempre lembrar:
+        {lorebook_context if lorebook_context else "Nenhum fato no Lorebook."}
+        
+        {search_results if search_results else ""}
+
+        Agora, responda à pergunta do usuário '{author}': {user_query}
+        """
+        
+        final_response = model.generate_content(final_prompt)
+        return final_response.text
+
     except Exception as e:
-        print(f"Erro ao sumarizar chat global: {e}"); return "Erro de sumarização global."
+        print(f"Erro ao gerar resposta de interação: {e}")
+        return "Desculpe, tive um problema para processar sua pergunta."
+
+def get_summary_response(model, text_to_summarize: str, level: str, start_date: str, end_date: str):
+    """Gera um resumo de um bloco de texto para a memória hierárquica."""
+    prompt = f"""
+    Você é uma IA arquivista. Sua tarefa é ler o log de um chat da Twitch e criar um resumo conciso e factual dos eventos mais importantes.
+    O resumo é para o nível de memória: '{level}', cobrindo o período de {start_date} até {end_date}.
+
+    Log do Chat para resumir:
+    ---
+    {text_to_summarize}
+    ---
+
+    Crie um resumo claro em um único parágrafo.
+
+    Resumo Gerado:
+    """
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        print(f"Erro ao gerar resumo: {e}")
+        return f"Não foi possível gerar o resumo para o período de {start_date} a {end_date}."

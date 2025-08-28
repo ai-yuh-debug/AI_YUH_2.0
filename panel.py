@@ -1,194 +1,267 @@
-# -*- coding: utf-8 -*-
+# panel.py
+
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import time
+from supabase import create_client
+import os
 from dotenv import load_dotenv
-from streamlit_option_menu import option_menu
+
+# --- Configuração da Página e Conexão com Supabase ---
+st.set_page_config(
+    page_title="Painel de Controle - AI YUH",
+    page_icon="🤖",
+    layout="wide",
+)
 
 load_dotenv()
-from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
-
-# --- Funções de DB ---
-@st.cache_data(ttl=5)
-def get_live_data(table_name, limit=50):
+@st.cache_resource
+def init_supabase_connection():
     try:
-        response = supabase_client.table(table_name).select("*").order("created_at", desc=True).limit(limit).execute()
-        return pd.DataFrame(response.data)
-    except:
-        return pd.DataFrame()
-
-@st.cache_data(ttl=10)
-def get_bot_status(key):
-    try:
-        response = supabase_client.table('bot_status').select("status_value").eq("status_key", key).single().execute()
-        return response.data.get('status_value', 'Aguardando...')
-    except:
-        return "Aguardando..."
-
-@st.cache_data(ttl=60)
-def get_management_data(table_name):
-    try:
-        return pd.DataFrame(supabase_client.table(table_name).select("*").order("id", desc=True).execute().data)
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e:
-        st.sidebar.error(f"Erro ao carregar {table_name}: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(ttl=60)
-def get_settings():
-    try:
-        return supabase_client.table('settings').select("*").limit(1).single().execute().data
-    except Exception as e:
-        st.sidebar.error(f"Erro ao carregar configs: {e}")
+        st.error(f"Erro ao conectar com Supabase: {e}")
         return None
 
-# --- Barra Lateral ---
-with st.sidebar:
-    st.title("🤖 AI_Yuh C.C.")
-    st.caption("Centro de Comando")
-    selected = option_menu(None, ["Dashboard", "Configurações", "Gerenciamento"],
-                           icons=["speedometer2", "sliders", "people-fill"], menu_icon="cast", default_index=0)
-    st.markdown("---")
-    bot_status = get_bot_status('bot_state')
-    if bot_status == 'Online':
-        st.success(f"Status: **{bot_status}**", icon="🟢")
-    else:
-        st.error(f"Status: **{bot_status}**", icon="🔴")
-    if st.button("Forçar Recarga do Painel"):
-        st.cache_data.clear()
-        st.rerun()
+supabase = init_supabase_connection()
+if not supabase:
+    st.error("A conexão com o Supabase falhou. Verifique as credenciais no .env.")
+    st.stop()
 
-# --- Conteúdo Principal ---
-if not DB_ENABLED:
-    st.error("ERRO GRAVE: Não foi possível conectar ao Supabase."); st.stop()
+# --- Funções de Lógica do Painel ---
+def fetch_data(table_name):
+    """Função genérica para buscar todos os dados de uma tabela."""
+    try:
+        response = supabase.table(table_name).select("*").execute()
+        return response.data
+    except Exception as e:
+        st.error(f"Erro ao buscar dados da tabela {table_name}: {e}")
+        return []
 
-if selected == "Dashboard":
-    st.title("📊 Dashboard")
-    st.subheader("Atividade ao Vivo")
+def upsert_setting(key, value):
+    """Insere ou atualiza uma configuração na tabela 'settings'."""
+    try:
+        supabase.table("settings").upsert({"key": key, "value": value}).execute()
+        st.success(f"Configuração '{key}' atualizada com sucesso!")
+    except Exception as e:
+        st.error(f"Erro ao atualizar configuração '{key}': {e}")
+
+def manage_user(username, role, action):
+    """Adiciona ou remove um usuário da tabela 'users'."""
+    try:
+        username = username.lower().strip()
+        if not username:
+            st.warning("O nome de usuário não pode estar vazio.")
+            return
+        if action == "add":
+            supabase.table("users").upsert({"username": username, "role": role}).execute()
+            st.success(f"Usuário '{username}' adicionado à lista de '{role}'.")
+        elif action == "remove":
+            supabase.table("users").delete().match({"username": username, "role": role}).execute()
+            st.success(f"Usuário '{username}' removido da lista de '{role}'.")
+    except Exception as e:
+        st.error(f"Erro ao gerenciar usuário '{username}': {e}")
+
+# --- Layout da Interface ---
+st.title("🤖 Painel de Controle da AI YUH")
+st.sidebar.title("Navegação")
+page = st.sidebar.radio("Selecione uma página", ["Dashboard", "Gerenciador de Memória", "Gerenciador de Usuários", "Configurações da IA"])
+
+# --- Página: Dashboard ---
+if page == "Dashboard":
+    st.header("📊 Dashboard")
+    st.markdown("Visão geral do status e atividade recente do bot.")
+
+    col1, col2, col3 = st.columns(3)
     
-    col_main, col_side = st.columns([2, 1.2])
-
-    with col_main:
-        st.markdown("##### Linha do Tempo de Eventos (Chat + Logs)")
-        
-        chat_df = get_live_data('live_chat')
-        logs_df = get_live_data('live_logs')
-        
-        df_list = []
-        if not chat_df.empty:
-            df_list.append(chat_df.rename(columns={'message': 'event', 'username': 'source'})[['created_at', 'source', 'event']])
-        if not logs_df.empty:
-            df_list.append(logs_df.rename(columns={'message': 'event', 'log_type': 'source'})[['created_at', 'source', 'event']])
-        
-        if df_list:
-            merged_df = pd.concat(df_list).sort_values(by='created_at', ascending=False)
-            st.dataframe(merged_df, use_container_width=True, height=600, hide_index=True)
-        else:
-            st.info("Aguardando atividade do bot ou mensagens no chat...")
-
-    with col_side:
-        st.subheader("Estatísticas e Cognição")
-        with st.container(border=True):
-            cols = st.columns(4)
-            cols[0].metric("Usuários", len(get_management_data('users')))
-            cols[1].metric("Fatos", len(get_management_data('lorebook')))
-            cols[2].metric("Mem. Pessoal", len(get_management_data('long_term_memory')))
-            cols[3].metric("Mem. Global", len(get_management_data('hierarchical_memory')))
-            
-        with st.container(border=True):
-            st.markdown("##### 🧠 Último Pensamento")
-            last_thought = get_bot_status('last_thought')
-            st.code(last_thought, language="text")
-        
-        with st.container(border=True):
-            st.markdown("##### 💾 Últimas Memórias Geradas")
-            st.caption("Memória Pessoal")
-            st.dataframe(get_management_data('long_term_memory').head(3), hide_index=True, use_container_width=True)
-            st.caption("Memória Global")
-            st.dataframe(get_management_data('hierarchical_memory').head(3), hide_index=True, use_container_width=True)
-
-if selected == "Configurações":
-    st.title("⚙️ Configurações da IA e Memória")
-    settings = get_settings()
-    if settings:
-        with st.form("settings_form"):
-            st.subheader("🎭 Personalidade e Modelos")
-            col1, col2 = st.columns(2)
-            with col1:
-                interaction_model = st.text_input("🤖 Modelo de Interação", settings.get('interaction_model', ''))
-            with col2:
-                archivist_model = st.text_input("🗄️ Modelo Arquivista", settings.get('archivist_model', ''))
-            personality = st.text_area("📄 Prompt de Personalidade", settings.get('personality_prompt', ''), height=250)
-            
-            st.subheader("🧠 Parâmetros de Geração e Memória")
-            col1_params, col2_params, col3_params = st.columns(3)
-            with col1_params:
-                temp = st.slider("🌡️ Temperatura", 0.0, 2.0, float(settings.get('temperature', 0.9)), 0.05)
-                max_tokens = st.slider("📏 Máx Tokens", 64, 2048, int(settings.get('max_output_tokens', 256)), 16)
-            with col2_params:
-                top_p = st.number_input("🎲 Top-P", 0.0, 1.0, float(settings.get('top_p', 1.0)), 0.05)
-                top_k = st.number_input("🎯 Top-K", 1, value=int(settings.get('top_k', 1)), step=1)
-            with col3_params:
-                mem_exp = st.number_input("Exp. Mem. Pessoal (min)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
-                glob_max_msg = st.number_input("Gatilho Msgs (qtd)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
-
-            if st.form_submit_button("Salvar Todas as Configurações", type="primary", use_container_width=True):
-                try:
-                    supabase_client.table('settings').update({
-                        'interaction_model': interaction_model, 'archivist_model': archivist_model,
-                        'personality_prompt': personality, 'temperature': temp, 'max_output_tokens': max_tokens,
-                        'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg,
-                        'top_p': top_p, 'top_k': top_k
-                    }).eq('id', settings['id']).execute()
-                    st.success("Configurações salvas!"); st.cache_data.clear()
-                except Exception as e:
-                    st.error(f"Erro: {e}")
-
-if selected == "Gerenciamento":
-    st.title("👥 Gerenciamento de Usuários e Lorebook")
-    col1, col2 = st.columns(2)
     with col1:
-        with st.container(border=True):
-            st.subheader("Usuários")
-            users_df = get_management_data('users')
-            st.dataframe(users_df, use_container_width=True)
-            with st.form("user_form", clear_on_submit=True):
-                username = st.text_input("Nome de Usuário").lower()
-                permission = st.selectbox("Nível de Permissão", ["master", "blacklist", "normal"])
-                if st.form_submit_button("Salvar Usuário", use_container_width=True):
-                    if username:
-                        try:
-                            supabase_client.table('users').upsert({'twitch_username': username, 'permission_level': permission}).execute()
-                            st.success(f"Usuário '{username}' salvo."); st.cache_data.clear(); st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao salvar: {e}")
+        try:
+            mem_count_result = supabase.table("memories").select('id', count='exact').execute()
+            st.metric("Total de Memórias", mem_count_result.count)
+        except Exception as e:
+            st.metric("Total de Memórias", f"Erro: {e}")
+    
+    with col2:
+        try:
+            master_count_result = supabase.table("users").select('username', count='exact').eq('role', 'master').execute()
+            st.metric("Usuários Mestres", master_count_result.count)
+        except Exception as e:
+            st.metric("Usuários Mestres", f"Erro: {e}")
+
+    with col3:
+        try:
+            blacklist_count_result = supabase.table("users").select('username', count='exact').eq('role', 'blacklisted').execute()
+            st.metric("Usuários na Blacklist", blacklist_count_result.count)
+        except Exception as e:
+            st.metric("Usuários na Blacklist", f"Erro: {e}")
+
+    st.subheader("Últimas Memórias Horárias Registradas")
+    try:
+        recent_memories = supabase.table("memories").select("*").eq("level", "hourly").order("created_at", desc=True).limit(5).execute().data
+        if recent_memories:
+            for mem in recent_memories:
+                with st.expander(f"**{mem['start_date']}** - Nível: {mem['level']}"):
+                    st.write(mem['content'])
+        else:
+            st.info("Nenhuma memória horária encontrada.")
+    except Exception as e:
+        st.error(f"Não foi possível carregar as memórias recentes: {e}")
+
+# --- Página: Gerenciador de Memória ---
+elif page == "Gerenciador de Memória":
+    st.header("🧠 Gerenciador de Memória")
+    
+    levels = ["hourly", "daily", "weekly", "monthly", "yearly"]
+    selected_level = st.selectbox("Filtrar por nível de memória", options=levels)
+    
+    search_term = st.text_input("Buscar por palavra-chave no conteúdo")
+    
+    try:
+        query = supabase.table("memories").select("*").eq("level", selected_level)
+        if search_term:
+            query = query.ilike("content", f"%{search_term}%")
+            
+        memories = query.order("start_date", desc=True).execute().data
+        
+        if not memories:
+            st.warning(f"Nenhuma memória encontrada para o nível '{selected_level}' com os filtros aplicados.")
+        else:
+            st.info(f"Exibindo {len(memories)} memórias.")
+            for mem in memories:
+                with st.expander(f"ID: {mem['id']} | Período: {mem['start_date']} a {mem['end_date']}"):
+                    edited_content = st.text_area("Conteúdo", value=mem['content'], height=150, key=f"text_{mem['id']}")
+                    
+                    col1, col2 = st.columns([1, 6])
+                    with col1:
+                        if st.button("Salvar Alterações", key=f"save_{mem['id']}"):
+                            supabase.table("memories").update({"content": edited_content}).eq("id", mem['id']).execute()
+                            st.success(f"Memória {mem['id']} atualizada!")
+                            st.rerun()
+                    with col2:
+                        if st.button("Deletar Memória", key=f"delete_{mem['id']}", type="primary"):
+                            supabase.table("memories").delete().eq("id", mem['id']).execute()
+                            st.success(f"Memória {mem['id']} deletada!")
+                            st.rerun()
+    except Exception as e:
+        st.error(f"Erro ao carregar memórias: {e}")
+
+# --- Página: Gerenciador de Usuários ---
+elif page == "Gerenciador de Usuários":
+    st.header("👥 Gerenciador de Usuários")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Usuários Mestres")
+        masters_data = [user for user in fetch_data('users') if user.get('role') == 'master']
+        masters_usernames = [user['username'] for user in masters_data]
+        st.dataframe(pd.DataFrame(masters_usernames, columns=["Username"]), use_container_width=True)
+        
+        new_master = st.text_input("Adicionar novo Mestre", key="new_master")
+        if st.button("Adicionar Mestre"):
+            manage_user(new_master, "master", "add")
+            st.rerun()
+            
+        remove_master = st.selectbox("Remover Mestre", options=[""] + masters_usernames, key="remove_master")
+        if st.button("Remover Mestre Selecionado"):
+            manage_user(remove_master, "master", "remove")
+            st.rerun()
 
     with col2:
-        with st.container(border=True):
-            st.subheader("Lorebook")
-            lorebook_df = get_management_data('lorebook')
-            if not lorebook_df.empty:
-                lorebook_df['delete'] = False
-                edited_df = st.data_editor(lorebook_df, column_config={"delete": st.column_config.CheckboxColumn("Apagar?", default=False)}, use_container_width=True, height=300, hide_index=True)
-                if st.button("Deletar Selecionadas", type="primary", use_container_width=True):
-                    entries_to_delete = edited_df[edited_df['delete']]
-                    if not entries_to_delete.empty:
-                        for entry_id in entries_to_delete['id']:
-                            delete_lorebook_entry(entry_id)
-                        st.success(f"{len(entries_to_delete)} entrada(s) deletada(s)!"); st.cache_data.clear(); st.rerun()
-            
-            with st.form("lorebook_form", clear_on_submit=True):
-                entry = st.text_area("Novo Fato", height=100)
-                if st.form_submit_button("Adicionar Fato", use_container_width=True):
-                    if entry:
-                        try:
-                            supabase_client.table('lorebook').insert({'entry': entry, 'created_by': 'painel_admin'}).execute()
-                            st.success("Fato adicionado!"); st.cache_data.clear(); st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao adicionar: {e}")
+        st.subheader("Blacklist de Usuários")
+        blacklisted_data = [user for user in fetch_data('users') if user.get('role') == 'blacklisted']
+        blacklisted_usernames = [user['username'] for user in blacklisted_data]
+        st.dataframe(pd.DataFrame(blacklisted_usernames, columns=["Username"]), use_container_width=True)
 
-# Atualização automática
-time.sleep(5)
-st.rerun()
+        new_blacklisted = st.text_input("Adicionar à Blacklist", key="new_blacklisted")
+        if st.button("Adicionar à Blacklist"):
+            manage_user(new_blacklisted, "blacklisted", "add")
+            st.rerun()
+
+        remove_blacklisted = st.selectbox("Remover da Blacklist", options=[""] + blacklisted_usernames, key="remove_blacklisted")
+        if st.button("Remover Usuário Selecionado"):
+            manage_user(remove_blacklisted, "blacklisted", "remove")
+            st.rerun()
+
+# --- Página: Configurações da IA ---
+elif page == "Configurações da IA":
+    st.header("⚙️ Configurações e Personalidade da IA")
+    
+    tab1, tab2, tab3 = st.tabs(["Personalidade (Prompt)", "Lorebook", "Configurações Gerais"])
+    
+    with tab1:
+        st.subheader("Prompt Principal do Sistema")
+        st.markdown("Este é o prompt que define a personalidade base da AI_YUH. Ele é enviado antes de cada interação.")
+        
+        try:
+            prompt_data = supabase.table("settings").select("value").eq("key", "system_prompt").execute().data
+            current_prompt = prompt_data[0]['value'] if prompt_data else "Você é a AI_YUH, uma IA amigável na Twitch."
+        except Exception:
+            current_prompt = "Erro ao carregar o prompt."
+
+        system_prompt = st.text_area("Edite o prompt do sistema:", value=current_prompt, height=250)
+        
+        if st.button("Salvar Prompt do Sistema"):
+            upsert_setting("system_prompt", system_prompt)
+
+    with tab2:
+        st.subheader("📖 Lorebook")
+        st.markdown("Adicione fatos e informações permanentes que a IA deve sempre lembrar.")
+        
+        with st.form("new_lore_entry_form"):
+            new_key = st.text_input("Chave do Fato (ex: 'usuário beanja')")
+            new_value = st.text_area("Descrição do Fato (ex: 'Sempre lembra os outros de se hidratarem.')")
+            submitted = st.form_submit_button("Adicionar ao Lorebook")
+            if submitted:
+                if new_key and new_value:
+                    supabase.table("lorebook").insert({"entry_key": new_key, "entry_value": new_value}).execute()
+                    st.success("Nova entrada adicionada ao Lorebook!")
+                else:
+                    st.warning("Ambos os campos 'Chave' e 'Descrição' são obrigatórios.")
+        
+        st.divider()
+        
+        st.markdown("#### Entradas Atuais do Lorebook")
+        lore_entries = fetch_data('lorebook')
+        if lore_entries:
+            for entry in lore_entries:
+                with st.container(border=True):
+                    st.markdown(f"**{entry['entry_key']}**")
+                    st.markdown(entry['entry_value'])
+                    if st.button("Deletar Entrada", key=f"del_lore_{entry['id']}", type="primary"):
+                        supabase.table("lorebook").delete().eq("id", entry['id']).execute()
+                        st.rerun()
+        else:
+            st.info("O Lorebook está vazio.")
+
+    with tab3:
+        st.subheader("Modelos de IA e Configurações Gerais")
+        st.markdown("Selecione os modelos Gemini a serem usados e outras configurações do bot.")
+
+        settings_data = {item['key']: item['value'] for item in fetch_data('settings')}
+        current_interaction_model = settings_data.get("interaction_model", "gemini-1.5-pro-latest")
+        current_archivist_model = settings_data.get("archivist_model", "gemini-1.5-flash-latest")
+        current_bot_prefix = settings_data.get("bot_prefix", "!ask")
+        
+        available_models = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"]
+        
+        interaction_model = st.selectbox(
+            "Modelo de Interação (Conversa)", 
+            options=available_models, 
+            index=available_models.index(current_interaction_model) if current_interaction_model in available_models else 0
+        )
+        archivist_model = st.selectbox(
+            "Modelo Arquivista (Resumos)", 
+            options=available_models,
+            index=available_models.index(current_archivist_model) if current_archivist_model in available_models else 0
+        )
+        bot_prefix = st.text_input("Prefixo de Comando do Bot", value=current_bot_prefix)
+        
+        if st.button("Salvar Configurações Gerais"):
+            upsert_setting("interaction_model", interaction_model)
+            upsert_setting("archivist_model", archivist_model)
+            upsert_setting("bot_prefix", bot_prefix)
+        
+        st.markdown("Depois de salvar, use o comando `!reload` no chat da Twitch para que o bot aplique as novas configurações.")

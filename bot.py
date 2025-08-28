@@ -1,199 +1,184 @@
-# -*- coding: utf-8 -*-
+# bot.py
+
 import os
-import socket
 import time
-from datetime import datetime, timedelta
 import threading
 import schedule
 import pytz
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from twitchio.ext import commands
+import sys
 
-load_dotenv()
-import gemini_handler
+# Importa os nossos handlers
 import database_handler
+import gemini_handler
 
-# --- Configurações & Variáveis Globais ---
-TTV_TOKEN = os.getenv('TTV_TOKEN')
-BOT_NICK = os.getenv('BOT_NICK').lower()
-TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
-HOST = "irc.chat.twitch.tv"
-PORT = 6667
-BOT_SETTINGS = {}
-LOREBOOK = []
-short_term_memory = {}
-global_chat_buffer = []
-GLOBAL_BUFFER_MAX_MESSAGES = 40
-GLOBAL_BUFFER_MAX_MINUTES = 15
-MEMORY_EXPIRATION_MINUTES = 5
-MAX_HISTORY_LENGTH = 10
-UNCERTAINTY_KEYWORDS = ["não sei", "nao sei", "não tenho acesso", "desconheço", "não consigo encontrar"]
-TIMEZONE = pytz.timezone('America/Sao_Paulo')
+# --- Carregamento de Configurações ---
+load_dotenv()
+TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
+TWITCH_CHANNEL = os.getenv("TWITCH_CHANNEL")
+BOT_NICK = os.getenv("BOT_NICK")
+BOT_PREFIX = os.getenv("BOT_PREFIX", "!ask")
+HOURLY_MEMORY_LIMIT = int(os.getenv("HOURLY_MEMORY_LIMIT", 40))
+tz_br = pytz.timezone('America/Sao_Paulo')
 
-def run_scheduler():
-    print(f"[{datetime.now(TIMEZONE).strftime('%H:%M:%S')}] Agendador de memória iniciado em uma thread de fundo.")
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+# --- Gerenciamento de Memória em RAM ---
+chat_buffer = []
+last_buffer_processing_time = datetime.now(pytz.utc)
 
-def consolidate_daily_memories():
-    print(f"[{datetime.now(TIMEZONE).strftime('%H:%M')}] AGENDADOR: Verificando memórias 'transfer'.")
-    today = datetime.now(TIMEZONE).date()
-    yesterday = today - timedelta(days=1)
-    start_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.min.time()))
-    end_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.max.time()))
-    memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer", start_of_yesterday, end_of_yesterday)
-    if not memories_to_consolidate:
-        print("AGENDADOR: Nenhuma memória 'transfer' de ontem para consolidar."); return
-    print(f"AGENDADOR: Encontradas {len(memories_to_consolidate)} memórias. Sumarizando...")
-    full_text = "\n".join([mem['summary'] for mem in memories_to_consolidate])
-    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia:\n{full_text}")
-    metadata = {"date": yesterday.isoformat()}
-    database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
-    database_handler.delete_memories_by_ids(ids_to_delete)
+# --- Funções de Sumarização (Lógica de Memória) ---
 
-def send_heartbeat():
-    """Tarefa agendada para atualizar o status do bot e confirmar que está online."""
-    database_handler.update_bot_status("Online")
+def summarize_hourly(archivist_model):
+    global chat_buffer, last_buffer_processing_time
+    if not chat_buffer:
+        print("Buffer de chat vazio. Nenhuma sumarização horária necessária.")
+        return
 
-def send_chat_message(sock, message):
-    try: sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
-    except Exception as e: print(f"Erro ao enviar mensagem: {e}")
-
-def summarize_and_clear_global_buffer():
-    global global_chat_buffer
-    if not global_chat_buffer: return
-    print(f"Buffer de transferência atingiu o limite: {len(global_chat_buffer)} mensagens.")
-    transcript = "\n".join(f"{msg['user']}: {msg['content']}" for msg in global_chat_buffer)
-    summary = gemini_handler.summarize_global_chat(transcript)
-    database_handler.save_hierarchical_memory("transfer", summary)
-    global_chat_buffer = []; print("Buffer de transferência sumarizado e limpo.")
+    print("Iniciando sumarização horária...")
+    log_content = "\n".join(chat_buffer)
+    start_time = last_buffer_processing_time
+    end_time = datetime.now(pytz.utc)
     
-def cleanup_inactive_memory():
-    now = datetime.now()
-    inactive_users = [user for user, data in short_term_memory.items() if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)]
-    for user in inactive_users:
-        print(f"Usuário {user} inativo. Sumarizando memória pessoal...")
-        user_memory = short_term_memory.pop(user)
-        summary = gemini_handler.summarize_conversation(user_memory['history'])
-        database_handler.save_long_term_memory(user, summary)
+    summary = gemini_handler.get_summary_response(
+        archivist_model, log_content, "hourly", 
+        start_time.strftime('%Y-%m-%d %H:%M:%S'), 
+        end_time.strftime('%Y-%m-%d %H:%M:%S')
+    )
+    
+    database_handler.insert_memory("hourly", f"Resumo da hora ({start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}): {summary}", start_time, end_time)
+    
+    chat_buffer = []
+    last_buffer_processing_time = end_time
+    print("Sumarização horária concluída e buffer limpo.")
 
-def process_message(sock, raw_message):
-    if "PRIVMSG" not in raw_message: return
-    try:
-        source, _, message_body = raw_message.partition('PRIVMSG')
-        user_info = source.split('!')[0][1:]
-        message_content = message_body.split(':', 1)[1].strip()
-        if user_info.lower() == BOT_NICK: return
+def summarize_daily(archivist_model):
+    print("Verificando sumarização diária...")
+    yesterday = datetime.now(tz_br) - timedelta(days=1)
+    start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(pytz.utc)
+    end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999).astimezone(pytz.utc)
+
+    hourly_memories = database_handler.get_memories_between("hourly", start, end)
+    if not hourly_memories:
+        print(f"Nenhuma memória horária encontrada para {start.strftime('%Y-%m-%d')}.")
+        return
+
+    print(f"Iniciando sumarização diária para {start.strftime('%Y-%m-%d')}...")
+    content = "\n".join([mem['content'] for mem in hourly_memories])
+    summary = gemini_handler.get_summary_response(archivist_model, content, "daily", start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d'))
+    database_handler.insert_memory("daily", f"Resumo do dia {start.strftime('%d/%m/%Y')}: {summary}", start, end)
+    database_handler.delete_memories_between("hourly", start, end)
+    print("Sumarização diária concluída.")
+
+def summarize_weekly(archivist_model):
+    print("Verificando sumarização semanal...")
+    today = datetime.now(tz_br)
+    if today.weekday() != 0: return # Roda apenas na Segunda-feira
+
+    end = today.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+    start = end - timedelta(days=6)
+    start_utc, end_utc = start.astimezone(pytz.utc), end.astimezone(pytz.utc)
+    
+    daily_memories = database_handler.get_memories_between("daily", start_utc, end_utc)
+    if not daily_memories:
+        print("Nenhuma memória diária na última semana para sumarizar.")
+        return
+
+    print("Iniciando sumarização semanal...")
+    content = "\n".join([mem['content'] for mem in daily_memories])
+    summary = gemini_handler.get_summary_response(archivist_model, content, "weekly", start_utc.strftime('%Y-%m-%d'), end_utc.strftime('%Y-%m-%d'))
+    database_handler.insert_memory("weekly", f"Resumo da semana ({start_utc.strftime('%d/%m')} a {end_utc.strftime('%d/%m')}): {summary}", start_utc, end_utc)
+    database_handler.delete_memories_between("daily", start_utc, end_utc)
+    print("Sumarização semanal concluída.")
+
+# --- Classe Principal do Bot ---
+
+class Bot(commands.Bot):
+    def __init__(self):
+        self.load_configs() # Carrega configs antes de inicializar o bot
+        super().__init__(token=TWITCH_TOKEN, prefix=self.bot_prefix, initial_channels=[TWITCH_CHANNEL])
+        self.interaction_model = gemini_handler.get_generative_model(self.interaction_model_name)
+        self.archivist_model = gemini_handler.get_generative_model(self.archivist_model_name)
         
-        global_chat_buffer.append({"user": user_info, "content": message_content})
+        if not all([self.interaction_model, self.archivist_model]):
+            print("Erro crítico: Não foi possível inicializar os modelos de IA. Verifique a API Key e os nomes dos modelos.")
+            sys.exit(1) # Encerra o programa se os modelos não puderem ser carregados
+
+    def load_configs(self):
+        """Carrega configurações do banco de dados."""
+        print("Buscando configurações dinâmicas do Supabase...")
+        settings = database_handler.get_bot_settings()
+        masters, blacklisted = database_handler.get_user_roles()
+
+        self.interaction_model_name = settings.get("interaction_model", "gemini-1.5-pro-latest")
+        self.archivist_model_name = settings.get("archivist_model", "gemini-1.5-flash-latest")
+        self.system_prompt = settings.get("system_prompt", "Você é a AI_YUH, uma IA amigável na Twitch.")
+        self.master_users = masters
+        self.blacklisted_users = blacklisted
+        self.bot_prefix = settings.get("bot_prefix", BOT_PREFIX)
+
+        print("Configurações carregadas.")
+
+    def run_scheduler(self):
+        """Loop que roda as tarefas agendadas."""
+        schedule.every().day.at("00:05", "America/Sao_Paulo").do(lambda: summarize_daily(self.archivist_model))
+        schedule.every().monday.at("00:10", "America/Sao_Paulo").do(lambda: summarize_weekly(self.archivist_model))
+        print("Agendador de memória configurado.")
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+
+    async def event_ready(self):
+        print(f'Bot conectado como | {self.nick}')
+        scheduler_thread = threading.Thread(target=self.run_scheduler, daemon=True)
+        scheduler_thread.start()
+        print("Thread do sistema de memória iniciada.")
+
+    async def event_message(self, message):
+        if message.echo: return
+        if message.author.name.lower() in self.blacklisted_users: return
+
+        timestamp = datetime.now(pytz.utc).strftime('%H:%M:%S')
+        chat_buffer.append(f"[{timestamp}] {message.author.name}: {message.content}")
+        print(f"Buffer: {len(chat_buffer)}/{HOURLY_MEMORY_LIMIT}", end='\r')
+
+        if len(chat_buffer) >= HOURLY_MEMORY_LIMIT:
+            # Roda a sumarização em uma thread separada para não bloquear o bot
+            threading.Thread(target=summarize_hourly, args=(self.archivist_model,), daemon=True).start()
         
-        user_permission = database_handler.get_user_permission(user_info)
-        if user_permission == 'blacklist': return
+        await self.handle_commands(message)
 
-        msg_lower = message_content.lower()
+    @commands.command(name="ask")
+    async def ask_command(self, ctx: commands.Context, *, question: str):
+        if ctx.author.name.lower() in self.blacklisted_users: return
+        print(f"\nComando !ask de {ctx.author.name}: {question}")
+
+        # Busca contextos em tempo real
+        lore_context = database_handler.get_lorebook_entries()
+        memory_items = database_handler.get_all_memories_for_context()
+        memory_context = "\n".join([mem['content'] for mem in memory_items])
         
-        learn_command = "!learn "
-        if msg_lower.startswith(learn_command):
-            if user_permission == 'master':
-                fact = message_content[len(learn_command):].strip()
-                if fact and database_handler.add_lorebook_entry(fact, user_info):
-                    global LOREBOOK
-                    LOREBOOK = database_handler.get_current_lorebook()
-                    send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
-                else:
-                    send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
-            else:
-                send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
-            return
+        response = gemini_handler.get_interaction_response(
+            self.interaction_model, question, ctx.author.name, 
+            self.system_prompt, lore_context, memory_context
+        )
+        await ctx.send(f"@{ctx.author.name}, {response}")
 
-        activation_ask = "!ask "; activation_mention = f"@{BOT_NICK} "
-        question = ""; is_activated = False
-        if msg_lower.startswith(activation_ask): is_activated=True; question=message_content[len(activation_ask):].strip()
-        elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
-
-        if is_activated and question:
-            current_lorebook = database_handler.get_current_lorebook()
-            long_term_memories = database_handler.search_long_term_memory(user_info)
-            hierarchical_memories = database_handler.search_hierarchical_memory()
-            user_memory = short_term_memory.get(user_info, {"history": []})
+    @commands.command(name="reload")
+    async def reload_command(self, ctx: commands.Context):
+        """Comando para recarregar as configurações do DB."""
+        if ctx.author.name.lower() in self.master_users:
+            self.load_configs()
+            # Recria os modelos com os novos nomes, se necessário
+            self.interaction_model = gemini_handler.get_generative_model(self.interaction_model_name)
+            self.archivist_model = gemini_handler.get_generative_model(self.archivist_model_name)
+            # Atualiza o prefixo do bot
+            self.prefix = self.bot_prefix
             
-            print("Tentando responder sem busca na web...")
-            initial_response = gemini_handler.generate_response_without_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories)
-            
-            final_response = initial_response
-            if any(keyword in initial_response.lower() for keyword in UNCERTAINTY_KEYWORDS):
-                print(f"Resposta inicial indica incerteza. Realizando busca na web.")
-                web_context = gemini_handler.web_search(question)
-                if web_context:
-                    final_response = gemini_handler.generate_response_with_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, web_context)
-            else:
-                print("Resposta inicial foi confiante. Não é necessário buscar na web.")
-
-            send_chat_message(sock, f"@{user_info} {final_response}")
-            
-            user_memory['history'].append({'role': 'user', 'parts': [question]})
-            user_memory['history'].append({'role': 'model', 'parts': [final_response]})
-            user_memory['last_interaction'] = datetime.now()
-            if len(user_memory['history']) > MAX_HISTORY_LENGTH: user_memory['history'] = user_memory['history'][2:]
-            short_term_memory[user_info] = user_memory
-            
-    except Exception as e:
-        print(f"Erro ao processar mensagem: {e}")
-
-def listen_for_messages(sock):
-    buffer = ""; last_cleanup = time.time(); last_global_summary = time.time()
-    while True:
-        try:
-            now = time.time()
-            if now - last_cleanup > 60: cleanup_inactive_memory(); last_cleanup = now
-            if len(global_chat_buffer) >= GLOBAL_BUFFER_MAX_MESSAGES or now - last_global_summary > (GLOBAL_BUFFER_MAX_MINUTES * 60):
-                summarize_and_clear_global_buffer(); last_global_summary = now
-            
-            buffer += sock.recv(2048).decode('utf-8', errors='ignore')
-            messages = buffer.split('\r\n'); buffer = messages.pop()
-            for raw_message in messages:
-                if not raw_message: continue
-                if raw_message.startswith('PING'): sock.send("PONG :tmi.twitch.tv\r\n".encode('utf-8')); continue
-                process_message(sock, raw_message)
-        except Exception as e:
-            print(f"Erro no loop de escuta: {e}"); time.sleep(5)
-
-def main():
-    global BOT_SETTINGS, LOREBOOK
-    BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
-    if not BOT_SETTINGS: print("ERRO CRÍTICO: Não foi possível carregar as configurações."); return
-    gemini_handler.load_models_from_settings(BOT_SETTINGS)
-    if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED: print("O bot não pode iniciar."); return
-    
-    schedule.every(GLOBAL_BUFFER_MAX_MINUTES).minutes.do(summarize_and_clear_global_buffer)
-    schedule.every().day.at("00:00", str(TIMEZONE)).do(consolidate_daily_memories)
-    schedule.every(2).minutes.do(send_heartbeat)
-    
-    scheduler_thread = threading.Thread(target=run_scheduler, name="MemoryScheduler")
-    scheduler_thread.daemon = True
-    scheduler_thread.start()
-    
-    sock = socket.socket()
-    try:
-        database_handler.update_bot_status("Online")
-        print("Conectando ao servidor IRC da Twitch...")
-        sock.connect((HOST, PORT))
-        print("Conectado. Autenticando...")
-        sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
-        sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
-        sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
-        send_chat_message(sock, f"AI_Yuh (v2.4.0-heartbeat) online. Status do painel ativado.")
-        listen_for_messages(sock)
-    except KeyboardInterrupt:
-        print("\nDesligamento solicitado pelo usuário (Ctrl+C).")
-    except Exception as e:
-        print(f"Erro fatal na conexão: {e}")
-    finally:
-        print("Desligando... Atualizando status para Offline.")
-        database_handler.update_bot_status("Offline")
-        sock.close()
-        print("Conexão fechada. Adeus!")
+            await ctx.send(f"@{ctx.author.name}, configurações e modelos de IA recarregados com sucesso!")
+        else:
+            await ctx.send(f"@{ctx.author.name}, você não tem permissão para usar este comando.")
 
 if __name__ == "__main__":
-    main()
+    bot = Bot()
+    bot.run()
