@@ -67,13 +67,45 @@ def send_heartbeat():
     """Tarefa agendada para atualizar o status do bot no painel, confirmando que está online."""
     database_handler.update_bot_status("Online")
 
+# =========================================================================================
+#                      ESTA É A FUNÇÃO CORRIGIDA
+# =========================================================================================
 def send_chat_message(sock, message):
-    """Envia uma mensagem para o chat da Twitch."""
-    try: 
-        sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
-        logging.info(f"BOT > {message}")
-    except Exception as e: 
-        logging.error(f"Erro ao enviar mensagem: {e}")
+    """
+    Envia uma mensagem para o chat da Twitch.
+    Se a mensagem for muito longa ou tiver múltiplas linhas, ela será dividida.
+    """
+    try:
+        # Se a mensagem contém quebras de linha, trate-a como uma lista de mensagens.
+        if '\n' in message:
+            messages_to_send = message.split('\n')
+        else:
+            # Se não, coloque a única mensagem em uma lista para usar o mesmo loop.
+            messages_to_send = [message]
+
+        for line in messages_to_send:
+            # Ignora linhas vazias que podem ser resultado de .split('\n')
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+
+            # Garante que a linha não exceda o limite de caracteres da Twitch
+            # (Um valor seguro é ~450 para dar margem para o prefixo PRIVMSG etc.)
+            if len(clean_line) > 450:
+                # Se uma única linha for muito longa, a quebramos também.
+                parts = [clean_line[i:i+450] for i in range(0, len(clean_line), 450)]
+                for part in parts:
+                    sock.send(f"PRIVMSG #{TTV_CHANNEL} :{part}\n".encode('utf-8'))
+                    logging.info(f"BOT (parte) > {part}")
+                    time.sleep(0.8) # Pausa um pouco maior para evitar spam
+            else:
+                sock.send(f"PRIVMSG #{TTV_CHANNEL} :{clean_line}\n".encode('utf-8'))
+                logging.info(f"BOT > {clean_line}")
+                time.sleep(0.8) # Pausa entre cada linha para evitar ser mutado (rate limiting)
+
+    except Exception as e:
+        logging.error(f"Erro ao enviar mensagem: {e}", exc_info=True)
+# =========================================================================================
 
 def summarize_and_clear_global_buffer():
     """Sumariza o buffer global de chat e o limpa."""
@@ -241,7 +273,7 @@ def main():
         
         # Espera um pouco pela confirmação de JOIN antes de enviar mensagem
         time.sleep(2) 
-        send_chat_message(sock, f"AI_Yuh (v2.4.1-stable) online.")
+        send_chat_message(sock, f"AI_Yuh (v2.4.2-hotfix) online.") # Mudei a versão para refletir a correção
         
         listen_for_messages(sock)
         
