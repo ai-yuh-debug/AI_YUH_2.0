@@ -31,11 +31,11 @@ MAX_HISTORY_LENGTH = 10
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 
 # =========================================================================================
-#                 NOVAS FUNÇÕES PARA MEMÓRIA HIERÁRQUICA
+#                 FUNÇÕES PARA MEMÓRIA HIERÁRQUICA
 # =========================================================================================
 def consolidate_weekly_memories():
     database_handler.add_log("INFO", "AGENDADOR: Verificando memórias 'daily' para consolidação semanal.", "SchedulerThread")
-    daily_memories = database_handler.get_memories_for_consolidation("daily", None, None) # Pega todas as memórias diárias
+    daily_memories = database_handler.get_memories_for_consolidation("daily", None, None)
     
     if len(daily_memories) < 7:
         database_handler.add_log("INFO", f"AGENDADOR: Apenas {len(daily_memories)}/7 memórias diárias. Aguardando para sumarização semanal.", "SchedulerThread")
@@ -61,7 +61,6 @@ def consolidate_monthly_memories():
     database_handler.add_log("INFO", "AGENDADOR: Verificando memórias 'weekly' para consolidação mensal.", "SchedulerThread")
     weekly_memories = database_handler.get_memories_for_consolidation("weekly", None, None)
     
-    # Usamos 4 semanas para formar um mês
     if len(weekly_memories) < 4:
         database_handler.add_log("INFO", f"AGENDADOR: Apenas {len(weekly_memories)}/4 memórias semanais. Aguardando.", "SchedulerThread")
         return
@@ -95,7 +94,7 @@ def consolidate_yearly_memories():
     full_text = "\n\n".join([f"Resumo de {mem['metadata']['month']}:\n{mem['summary']}" for mem in memories_to_summarize])
     year_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do ano a seguir:\n{full_text}")
     
-    year_number = datetime.now(TIMEZONE).year - 1 # Assumindo que roda no início do ano seguinte
+    year_number = datetime.fromisoformat(memories_to_summarize[-1]['metadata']['month']).year
     metadata = {"year": year_number}
     
     database_handler.save_hierarchical_memory("yearly", year_summary, metadata)
@@ -103,6 +102,34 @@ def consolidate_yearly_memories():
     ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_log("INFO", "AGENDADOR: Memória anual consolidada e memórias mensais limpas.", "SchedulerThread")
+
+# =========================================================================================
+#                      NOVA FUNÇÃO PARA MEMÓRIA SECULAR
+# =========================================================================================
+def consolidate_secular_memories():
+    database_handler.add_log("INFO", "AGENDADOR: Verificando memórias 'yearly' para consolidação secular.", "SchedulerThread")
+    yearly_memories = database_handler.get_memories_for_consolidation("yearly", None, None)
+    
+    if len(yearly_memories) < 100:
+        database_handler.add_log("INFO", f"AGENDADOR: Apenas {len(yearly_memories)}/100 memórias anuais. Aguardando.", "SchedulerThread")
+        return
+
+    memories_to_summarize = yearly_memories[:100]
+    database_handler.add_log("INFO", "AGENDADOR: 100 memórias anuais encontradas. Sumarizando para memória secular...", "SchedulerThread")
+    
+    full_text = "\n\n".join([f"Resumo do ano {mem['metadata']['year']}:\n{mem['summary']}" for mem in memories_to_summarize])
+    century_summary = gemini_handler.summarize_global_chat(f"Você tem a tarefa monumental de resumir 100 anos de eventos. Leia os resumos anuais a seguir e crie uma narrativa coesa dos eventos, mudanças culturais e marcos mais importantes do século:\n{full_text}")
+    
+    start_year = memories_to_summarize[0]['metadata']['year']
+    end_year = memories_to_summarize[-1]['metadata']['year']
+    metadata = {"start_year": start_year, "end_year": end_year}
+    
+    database_handler.save_hierarchical_memory("century", century_summary, metadata)
+    
+    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
+    database_handler.delete_memories_by_ids(ids_to_delete)
+    database_handler.add_log("INFO", "AGENDADOR: Memória secular consolidada e memórias anuais limpas.", "SchedulerThread")
+# =========================================================================================
 
 def run_scheduler():
     logging.info("Agendador de memória e tarefas iniciado.")
@@ -114,8 +141,10 @@ def run_scheduler():
     # Tarefas de baixa frequência (madrugada)
     schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
     schedule.every().monday.at("01:00", str(TIMEZONE)).do(consolidate_weekly_memories)
-    schedule.every().day.at("01:30", str(TIMEZONE)).do(consolidate_monthly_memories) # Roda todo dia para checar se já tem 4 semanas
-    schedule.every().day.at("02:00", str(TIMEZONE)).do(consolidate_yearly_memories) # Roda todo dia para checar se já tem 12 meses
+    schedule.every().day.at("01:30", str(TIMEZONE)).do(consolidate_monthly_memories) # Roda todo dia para checar
+    schedule.every().day.at("02:00", str(TIMEZONE)).do(consolidate_yearly_memories) # Roda todo dia para checar
+    # Adicionando a checagem secular. Roda todo dia, mas só vai agir uma vez a cada 100 anos.
+    schedule.every().day.at("02:30", str(TIMEZONE)).do(consolidate_secular_memories)
     schedule.every().day.at("03:00", str(TIMEZONE)).do(database_handler.delete_old_logs)
     
     while True:
@@ -123,7 +152,6 @@ def run_scheduler():
         time.sleep(1)
 
 def consolidate_daily_memories():
-    # ... (código existente da função)
     database_handler.add_log("INFO", "AGENDADOR: Verificando memórias 'transfer'...", "SchedulerThread")
     today = datetime.now(TIMEZONE).date()
     yesterday = today - timedelta(days=1)
@@ -142,7 +170,6 @@ def consolidate_daily_memories():
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_log("INFO", "AGENDADOR: Memória diária consolidada.", "SchedulerThread")
 
-# ... (o resto de main_bot.py, como send_heartbeat, send_chat_message, process_message, etc., continua igual)
 def send_heartbeat():
     database_handler.update_bot_status("Online")
 
@@ -281,7 +308,7 @@ def main():
         database_handler.add_log("INFO", "Conectado e autenticado.", "BotThread")
         time.sleep(2)
         database_handler.update_bot_status("Online")
-        send_chat_message(sock, f"AI_Yuh (v2.9.0-full-memory) online.")
+        send_chat_message(sock, f"AI_Yuh (v3.0.0-century) online.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_log("CRITICAL", f"Erro fatal na conexão: {e}", "BotThread")
