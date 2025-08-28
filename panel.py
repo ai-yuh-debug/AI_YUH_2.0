@@ -57,17 +57,22 @@ with st.container(border=True):
     col_status, col_debug = st.columns(2)
     with col_status:
         bot_status = get_bot_status()
-        status_color = {"Online": "green", "Offline": "red"}.get(bot_status, "gray")
-        st.markdown(f"**Status do Bot:** <span style='color:{status_color}; font-weight:bold;'>{bot_status}</span>", unsafe_allow_html=True)
+        status_text = bot_status or "Desconhecido"
+        status_color = "gray"
+        if "AWAKE" in status_text:
+            status_color = "green"
+        elif "ASLEEP" in status_text:
+            status_color = "orange"
+        elif "Offline" in status_text:
+            status_color = "red"
+        st.markdown(f"**Status do Bot:** <span style='color:{status_color}; font-weight:bold;'>{status_text}</span>", unsafe_allow_html=True)
     
     with col_debug:
         debug_status = get_bot_debug_status()
         st.text_area("Última Ação da IA", debug_status, height=100, disabled=True, key="debug_status")
 
-    # Busca todos os logs recentes
     log_entries = get_live_logs(limit=150)
     
-    # Filtra os logs para cada coluna
     system_logs = [log for log in log_entries if log.get('log_type') not in ['CHAT', 'IA PENSANDO']]
     ai_thinking_logs = [log for log in log_entries if log.get('log_type') == 'IA PENSANDO']
     chat_logs = [log for log in log_entries if log.get('log_type') == 'CHAT']
@@ -133,12 +138,12 @@ if settings:
 
 with st.expander("👥 Gerenciar Usuários"):
     users_df = get_users()
-    if not users_df.empty: st.dataframe(users_df, use_container_width=True)
+    if not users_df.empty: st.dataframe(users_df)
     else: st.info("Nenhum usuário encontrado.")
     st.subheader("Adicionar ou Atualizar Usuário")
     with st.form("user_form", clear_on_submit=True):
         username = st.text_input("Nome de Usuário (Twitch)").lower()
-        permission = st.selectbox("Nível de Permissão", ["normal", "master", "blacklist"])
+        permission = st.selectbox("Nível de Permissão", ["normal", "master", "blacklist", "bot"])
         if st.form_submit_button("Salvar Usuário"):
             if username:
                 try:
@@ -151,7 +156,7 @@ with st.expander("📚 Gerenciar Lorebook", expanded=True):
     lorebook_df = get_lorebook()
     if not lorebook_df.empty:
         lorebook_df['delete'] = False
-        edited_df = st.data_editor(lorebook_df, column_config={"delete": st.column_config.CheckboxColumn("Apagar?", default=False)}, use_container_width=True, hide_index=True)
+        edited_df = st.data_editor(lorebook_df, hide_index=True, column_config={"delete": st.column_config.CheckboxColumn("Apagar?", default=False)})
         if st.button("Deletar Entradas Selecionadas", type="primary"):
             entries_to_delete = edited_df[edited_df['delete']]
             if not entries_to_delete.empty:
@@ -176,7 +181,7 @@ with st.expander("🧠 Visualizar Memória Pessoal"):
     memory_df = get_long_term_memory()
     if not memory_df.empty:
         memory_df['created_at'] = pd.to_datetime(memory_df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
-        st.dataframe(memory_df, use_container_width=True, height=600)
+        st.dataframe(memory_df, height=600)
     else: st.info("Nenhuma memória pessoal encontrada.")
 
 with st.expander("🌍 Visualizar Memória Global"):
@@ -184,7 +189,7 @@ with st.expander("🌍 Visualizar Memória Global"):
     hier_mem_df = get_hierarchical_memory()
     if not hier_mem_df.empty:
         hier_mem_df['created_at'] = pd.to_datetime(hier_mem_df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
-        st.dataframe(hier_mem_df, use_container_width=True, height=600)
+        st.dataframe(hier_mem_df, height=600)
     else: st.info("Nenhuma memória hierárquica encontrada.")
 
 st.sidebar.header("Ações Rápidas")

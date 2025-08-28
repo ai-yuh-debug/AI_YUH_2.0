@@ -35,12 +35,30 @@ def load_models_from_settings(settings: dict):
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
-def web_search_ddgs(query: str, num_results: int = 3) -> str:
+def web_search_ddgs(query: str, num_results: int = 5) -> str:
+    """
+    Executa uma busca na web usando DDGS.
+    Primeiro tenta a busca de notícias, se falhar ou não retornar nada, usa a busca de texto padrão.
+    """
     database_handler.add_live_log("IA PENSANDO", f"Executando busca DDGS por: '{query}'")
     try:
-        results = DDGS().text(query, max_results=num_results)
-        if not results: return "Nenhum resultado encontrado na web."
-        return "Contexto da busca na web:\n" + "\n".join(f"- {res['title']}: {res['body']}" for res in results)
+        # Tenta primeiro a busca de notícias, que é mais relevante para "capa do dia"
+        news_results = DDGS().news(query, max_results=num_results)
+        if news_results:
+            database_handler.add_live_log("IA PENSANDO", f"Encontrados {len(news_results)} resultados de notícias.")
+            # Formata os resultados de notícias de forma clara para a IA
+            return "Contexto de notícias da busca na web:\n" + "\n".join(f"- Título: {res['title']}, Fonte: {res['source']}, Conteúdo: {res['body']}" for res in news_results)
+        
+        # Se a busca de notícias não retornar nada, tenta a busca de texto padrão
+        database_handler.add_live_log("IA PENSANDO", "Nenhuma notícia encontrada. Tentando busca de texto padrão.")
+        text_results = DDGS().text(query, max_results=num_results)
+        if not text_results:
+            return "Nenhum resultado encontrado na web."
+            
+        database_handler.add_live_log("IA PENSANDO", f"Encontrados {len(text_results)} resultados de texto.")
+        # Formata os resultados de texto de forma clara para a IA
+        return "Contexto da busca na web:\n" + "\n".join(f"- Título: {res['title']}, Conteúdo: {res['body']}" for res in text_results)
+
     except Exception as e:
         print(f"Erro na busca DDGS: {e}"); return "Erro ao tentar buscar na web."
 
