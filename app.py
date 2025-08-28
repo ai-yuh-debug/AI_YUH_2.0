@@ -21,8 +21,6 @@ def start_bot_thread():
 
 if __name__ == "__main__":
     # 1. Iniciar o bot em uma thread de fundo
-    # A thread é configurada como 'daemon' para que ela seja encerrada automaticamente
-    # se o programa principal (Streamlit) for finalizado.
     bot_thread = threading.Thread(target=start_bot_thread, name="BotThread", daemon=True)
     bot_thread.start()
 
@@ -32,13 +30,10 @@ if __name__ == "__main__":
     # 2. Iniciar o painel Streamlit na thread principal
     logging.info("Iniciando o painel de controle Streamlit...")
     
-    # Busca a porta fornecida pela Render, ou usa 8501 como padrão localmente
     port = os.environ.get("PORT", 8501)
     
-    # Comando para rodar o Streamlit
-    # Os flags --server.enableCORS e --server.enableXsrfProtection são recomendados
-    # para evitar problemas de conexão quando rodando em serviços como a Render.
+    # Este é o comando que liga o seu PAINEL
     streamlit_command = f"streamlit run panel.py --server.port {port} --server.enableCORS false --server.enableXsrfProtection false"
     
-    # Executa o comando. Este comando bloqueará a execução aqui, mantendo o painel vivo.
+    # Executa o comando do painel. O programa ficará "preso" aqui, mantendo o painel vivo.
     os.system(streamlit_command)
