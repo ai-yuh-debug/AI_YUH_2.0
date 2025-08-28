@@ -1,19 +1,10 @@
-# Versão otimizada para reduzir o consumo de memória na Render
-
-# Core do Bot
+# Versão congelada para compatibilidade máxima (Python < 3.9)
+# Inclui bibliotecas para o painel e o agendador de memória.
 python-dotenv
-schedule
-pytz
-
-# Conexão com a Twitch (usando a biblioteca nativa, mais leve que twitchio)
-# (Mantendo a estrutura atual que usa socket, não precisamos de twitchio)
-
-# IA e Banco de Dados
 google-generativeai==0.8.5
 supabase
 ddgs
-
-# Painel Web
 streamlit
-# Vamos remover pandas e deixar o Streamlit usar suas dependências internas.
-# Se o Streamlit quebrar sem ele, podemos adicioná-lo de volta, mas vale o teste.
+pandas
+schedule==1.2.2  # Nova biblioteca para agendamento
+pytz==2024.1     # Nova biblioteca para fusos horários
