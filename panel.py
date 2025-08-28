@@ -3,26 +3,17 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime
+import streamlit.components.v1 as components
 
 load_dotenv()
-from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs
+from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry
 
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
 
-@st.cache_data(ttl=10)
-def get_bot_status():
-    try:
-        response = supabase_client.table('bot_status').select("status_value").eq("id", 1).single().execute()
-        return response.data.get('status_value', 'Desconhecido')
-    except Exception: return "Desconhecido"
+# As funções de busca de dados em tempo real (get_bot_status, get_live_logs)
+# não são mais chamadas diretamente pelo Python, mas as de dados
+# de longa duração (settings, users, etc.) continuam sendo essenciais.
 
-@st.cache_data(ttl=10)
-def get_bot_debug_status():
-    try:
-        response = supabase_client.table('bot_status').select("status_value").eq("id", 23).single().execute()
-        return response.data.get('status_value', 'Aguardando depuração...')
-    except Exception: return "Aguardando depuração..."
-    
 @st.cache_data(ttl=60)
 def get_settings():
     try: return supabase_client.table('settings').select("*").limit(1).single().execute().data
@@ -51,46 +42,87 @@ def get_hierarchical_memory():
 st.title("🤖 Painel de Controle do AI_Yuh Bot")
 if not DB_ENABLED: st.error("ERRO GRAVE: Não foi possível conectar ao Supabase."); st.stop()
 
+# --- Seção de Atividade ao Vivo ---
 with st.container(border=True):
     st.subheader("Atividade ao Vivo e Status")
     
-    col_status, col_debug = st.columns(2)
-    with col_status:
-        bot_status = get_bot_status()
-        status_color = {"Online": "green", "Offline": "red"}.get(bot_status, "gray")
-        st.markdown(f"**Status do Bot:** <span style='color:{status_color}; font-weight:bold;'>{bot_status}</span>", unsafe_allow_html=True)
+    # Placeholders que o JavaScript irá preencher
+    status_placeholder = st.empty()
+    debug_placeholder = st.empty()
     
-    with col_debug:
-        debug_status = get_bot_debug_status()
-        st.text_area("Última Ação da IA", debug_status, height=100, disabled=True, key="debug_status")
-
-    # Busca todos os logs recentes
-    log_entries = get_live_logs(limit=150)
-    
-    # Filtra os logs para cada coluna
-    system_logs = [log for log in log_entries if log.get('log_type') not in ['CHAT', 'IA PENSANDO']]
-    ai_thinking_logs = [log for log in log_entries if log.get('log_type') == 'IA PENSANDO']
-    chat_logs = [log for log in log_entries if log.get('log_type') == 'CHAT']
-
     col1, col2, col3 = st.columns(3)
-
     with col1:
         st.markdown("##### ⚙️ Logs do Sistema")
-        system_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['log_type']}: {log['message']}" for log in system_logs])
-        st.text_area("System Logs", system_content, height=300, disabled=True, key="system_logs")
-
+        system_log_placeholder = st.empty()
     with col2:
         st.markdown("##### 🧠 Pensamento da IA")
-        ai_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['message']}" for log in ai_thinking_logs])
-        st.text_area("AI Thinking", ai_content, height=300, disabled=True, key="ai_thinking")
-
+        ai_log_placeholder = st.empty()
     with col3:
         st.markdown("##### 💬 Chat Processado")
-        chat_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['message']}" for log in chat_logs])
-        st.text_area("Chat", chat_content, height=300, disabled=True, key="chat_logs")
+        chat_log_placeholder = st.empty()
 
-    st.html("<meta http-equiv='refresh' content='7'>")
+# Componente HTML/JS para atualização em tempo real
+components.html(
+    f"""
+    <script type="text/javascript">
+    // Mapeia os placeholders do Streamlit para variáveis JavaScript
+    const statusPlaceholder = parent.document.getElementById('{status_placeholder._id}');
+    const debugPlaceholder = parent.document.getElementById('{debug_placeholder._id}');
+    const systemLogPlaceholder = parent.document.getElementById('{system_log_placeholder._id}');
+    const aiLogPlaceholder = parent.document.getElementById('{ai_log_placeholder._id}');
+    const chatLogPlaceholder = parent.document.getElementById('{chat_log_placeholder._id}');
 
+    function formatTimestamp(isoString) {{
+        if (!isoString) return '';
+        const date = new Date(isoString);
+        // Ajusta para o fuso horário de São Paulo (UTC-3)
+        const localDate = new Date(date.getTime());
+        return localDate.toLocaleTimeString('pt-BR', {{ timeZone: 'America/Sao_Paulo' }});
+    }}
+
+    async function fetchData() {{
+        try {{
+            // A API FastAPI está rodando na mesma máquina, na porta 10001
+            const response = await fetch('http://localhost:10001/api/live_data');
+            const data = await response.json();
+
+            // 1. Atualiza o Status Principal
+            const statusText = data.status || 'Desconhecido';
+            const statusColor = statusText.toLowerCase().includes('awake') ? 'green' : (statusText.toLowerCase().includes('asleep') ? 'orange' : 'red');
+            statusPlaceholder.innerHTML = `<p><b>Status do Bot:</b> <span style="color:${{statusColor}}; font-weight:bold;">${{statusText}}</span></p>`;
+
+            // 2. Atualiza o Status de Depuração
+            const debugText = data.debug_status || 'Aguardando depuração...';
+            debugPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 100px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{debugText}}</textarea>`;
+
+            // 3. Filtra e Formata os Logs
+            const allLogs = data.logs || [];
+            const systemLogs = allLogs.filter(log => !['CHAT', 'IA PENSANDO'].includes(log.log_type));
+            const aiLogs = allLogs.filter(log => log.log_type === 'IA PENSANDO');
+            const chatLogs = allLogs.filter(log => log.log_type === 'CHAT');
+
+            const formatLogs = (logs) => logs.map(log => `${{formatTimestamp(log.created_at)}} | ${{log.log_type ? log.log_type + ':' : ''}} ${{log.message}`).join('\\n');
+
+            // 4. Atualiza as caixas de texto de log
+            systemLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(systemLogs)}}</textarea>`;
+            aiLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(aiLogs)}}</textarea>`;
+            chatLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(chatLogs)}}</textarea>`;
+
+        }} catch (e) {{
+            console.error("Erro ao buscar dados da API:", e);
+            statusPlaceholder.innerHTML = `<p><b>Status do Bot:</b> <span style="color:red; font-weight:bold;">Erro de conexão com a API</span></p>`;
+        }}
+    }}
+
+    // Executa a função pela primeira vez e depois a cada 5 segundos
+    fetchData();
+    setInterval(fetchData, 5000);
+    </script>
+    """,
+    height=0,
+)
+
+# --- Seções de Configuração com Expanders (TUDO RESTAURADO) ---
 settings = get_settings()
 if settings:
     with st.expander("⚙️ Configurações Gerais da IA"):
@@ -138,7 +170,7 @@ with st.expander("👥 Gerenciar Usuários"):
     st.subheader("Adicionar ou Atualizar Usuário")
     with st.form("user_form", clear_on_submit=True):
         username = st.text_input("Nome de Usuário (Twitch)").lower()
-        permission = st.selectbox("Nível de Permissão", ["normal", "master", "blacklist"])
+        permission = st.selectbox("Nível de Permissão", ["normal", "master", "blacklist", "bot"])
         if st.form_submit_button("Salvar Usuário"):
             if username:
                 try:
