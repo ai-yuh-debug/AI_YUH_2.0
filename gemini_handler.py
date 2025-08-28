@@ -4,6 +4,8 @@ import google.generativeai as genai
 from ddgs import DDGS
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import database_handler
+import requests
+from bs4 import BeautifulSoup
 
 GEMINI_ENABLED = False
 interaction_model = None
@@ -36,46 +38,70 @@ def load_models_from_settings(settings: dict):
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
 def web_search_ddgs(query: str, num_results: int = 5) -> str:
-    """
-    Executa uma busca na web usando DDGS.
-    Primeiro tenta a busca de notícias, se falhar ou não retornar nada, usa a busca de texto padrão.
-    """
     database_handler.add_live_log("IA PENSANDO", f"Executando busca DDGS por: '{query}'")
     try:
-        # Tenta primeiro a busca de notícias, que é mais relevante para "capa do dia"
         news_results = DDGS().news(query, max_results=num_results)
         if news_results:
             database_handler.add_live_log("IA PENSANDO", f"Encontrados {len(news_results)} resultados de notícias.")
-            # Formata os resultados de notícias de forma clara para a IA
             return "Contexto de notícias da busca na web:\n" + "\n".join(f"- Título: {res['title']}, Fonte: {res['source']}, Conteúdo: {res['body']}" for res in news_results)
         
-        # Se a busca de notícias não retornar nada, tenta a busca de texto padrão
         database_handler.add_live_log("IA PENSANDO", "Nenhuma notícia encontrada. Tentando busca de texto padrão.")
         text_results = DDGS().text(query, max_results=num_results)
         if not text_results:
             return "Nenhum resultado encontrado na web."
             
         database_handler.add_live_log("IA PENSANDO", f"Encontrados {len(text_results)} resultados de texto.")
-        # Formata os resultados de texto de forma clara para a IA
         return "Contexto da busca na web:\n" + "\n".join(f"- Título: {res['title']}, Conteúdo: {res['body']}" for res in text_results)
 
     except Exception as e:
         print(f"Erro na busca DDGS: {e}"); return "Erro ao tentar buscar na web."
+
+def read_url_content(url: str) -> str:
+    database_handler.add_live_log("IA PENSANDO", f"Tentando ler o conteúdo da URL: {url}")
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        for script_or_style in soup(["script", "style"]):
+            script_or_style.decompose()
+
+        text = soup.get_text()
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+
+        return f"Conteúdo da página '{url}':\n\n{text[:4000]}"
+
+    except requests.RequestException as e:
+        print(f"Erro ao acessar a URL {url}: {e}")
+        return f"Erro: Não foi possível acessar a URL. O site pode estar bloqueado ou fora do ar. Erro: {e}"
+    except Exception as e:
+        print(f"Erro ao processar a URL {url}: {e}")
+        return "Erro: Não foi possível processar o conteúdo da página."
 
 def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
     
     full_history = []
     personality_prompt = settings.get('personality_prompt', '')
+    
+    # ==============================================================================
+    #                      PROMPT RESTAURADO E APRIMORADO
+    # ==============================================================================
     search_instructions = (
         "\n\n**REGRA CRÍTICA DE BUSCA:** Sua primeira tarefa é avaliar a pergunta do usuário. Se a pergunta exigir "
-        "qualquer tipo de conhecimento externo ou atual (notícias, datas, fatos específicos que não estariam no seu Lorebook), "
-        "sua PRIMEIRA E ÚNICA resposta DEVE ser `[SEARCH]termo de busca otimizado[/SEARCH]`. "
-        "NÃO tente responder de outra forma. NÃO se desculpe. NÃO adicione texto extra. A falha em seguir esta regra resultará em um erro."
+        "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS:**\n"
+        "1. **Para buscas gerais:** Se a pergunta do usuário exigir conhecimento externo ou atual (notícias, eventos, fatos, cotações, etc.) que não esteja na sua memória, sua PRIMEIRA E ÚNICA resposta DEVE ser `[SEARCH]termo de busca otimizado[/SEARCH]`.\n"
+        "2. **Para ler uma página específica:** Se o usuário fornecer uma URL e pedir explicitamente para você ler ou resumir seu conteúdo, sua PRIMEIRA E ÚNICA resposta DEVE ser `[READ_URL]https://url.completa/aqui[/READ_URL]`.\n"
+        "**NÃO tente responder de outra forma. NÃO se desculpe. NÃO adicione texto extra. A falha em seguir estas regras resultará em um erro.**"
     )
     full_history.append({'role': 'user', 'parts': [personality_prompt + search_instructions]})
-    full_history.append({'role': 'model', 'parts': ["REGRA COMPREENDIDA. Se for necessário conhecimento externo, minha única resposta inicial será `[SEARCH]query[/SEARCH]`."]})
-    
+    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS. Minha única resposta inicial para perguntas que exigem conhecimento externo será `[SEARCH]query[/SEARCH]` ou `[READ_URL]url[/READ_URL]`."]})
+    # ==============================================================================
+
     if lorebook:
         lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
         full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
@@ -100,11 +126,17 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
         
         if initial_text.startswith("[SEARCH]") and initial_text.endswith("[/SEARCH]"):
             query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
-            search_context = web_search_ddgs(query)
-            database_handler.add_live_log("IA PENSANDO", f"Contexto da busca retornado para a IA.")
-            
-            final_prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final para o usuário.", search_context]
-            response = chat.send_message(final_prompt_parts, safety_settings=safety_settings)
+            context = web_search_ddgs(query)
+            database_handler.add_live_log("IA PENSANDO", f"Contexto da BUSCA retornado para a IA.")
+            prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final.", context]
+            response = chat.send_message(prompt_parts, safety_settings=safety_settings)
+
+        elif initial_text.startswith("[READ_URL]") and initial_text.endswith("[/READ_URL]"):
+            url = initial_text.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
+            context = read_url_content(url)
+            database_handler.add_live_log("IA PENSANDO", f"Contexto da LEITURA DE URL retornado para a IA.")
+            prompt_parts = ["Você recebeu o conteúdo da página web. Com base neste texto, formule sua resposta final.", context]
+            response = chat.send_message(prompt_parts, safety_settings=safety_settings)
             
         if not response.parts: return "Minha resposta foi bloqueada por segurança."
         final_text = response.text.replace('*', '').replace('`', '').strip()
