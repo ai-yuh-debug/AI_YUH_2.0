@@ -67,7 +67,7 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
         full_history.append({'role': 'user', 'parts': [f"Resumos de conversas passadas com este usuário:\n{memories_text}"]})
         full_history.append({'role': 'model', 'parts': ["Memórias do usuário assimiladas."]})
     if hierarchical_memories:
-        hier_mem_text = "\n".join(f"- {mem['summary']}" for mem in hierarchical_memories) # Acessa a chave 'summary'
+        hier_mem_text = "\n".join([f"- {mem['summary']}" for mem in hierarchical_memories if mem.get('summary')])
         full_history.append({'role': 'user', 'parts': [f"Resumos de eventos recentes no chat:\n{hier_mem_text}"]})
         full_history.append({'role': 'model', 'parts': ["Memórias do chat assimiladas."]})
         
