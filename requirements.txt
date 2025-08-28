@@ -1,12 +1,9 @@
-# Versão congelada para compatibilidade máxima (Python < 3.9)
-# Inclui bibliotecas para o painel e o agendador de memória.
+# Versão final, leve e otimizada para o Render
 python-dotenv
 google-generativeai==0.8.5
 supabase
 ddgs
 streamlit
 pandas
-schedule==1.2.2  # Nova biblioteca para agendamento
-pytz==2024.1     # Nova biblioteca para fusos horários
-streamlit-option-menu
-streamlit-extras # Nova biblioteca para widgets
+schedule==1.2.2
+pytz==2024.1
