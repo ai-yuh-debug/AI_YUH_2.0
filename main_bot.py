@@ -9,7 +9,7 @@ import pytz
 from dotenv import load_dotenv
 import logging
 
-# Configuração do logger
+# Configuração do logger para ser consistente em todo o projeto
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(threadName)s] - %(levelname)s - %(message)s')
 
 load_dotenv()
@@ -18,7 +18,7 @@ import database_handler
 
 # --- Configurações & Variáveis Globais ---
 TTV_TOKEN = os.getenv('TTV_TOKEN')
-BOT_NICK = os.getenv('BOT_NICK').lower()
+BOT_NICK = os.getenv('BOT_NICK', 'ai_yuh').lower()
 TTV_CHANNEL = os.getenv('TTV_CHANNEL').lower()
 HOST = "irc.chat.twitch.tv"
 PORT = 6667
@@ -34,12 +34,14 @@ UNCERTAINTY_KEYWORDS = ["não sei", "nao sei", "não tenho certeza", "não tenho
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 
 def run_scheduler():
-    logging.info("Agendador de memória iniciado em uma thread de fundo.")
+    """Executa o loop do agendador de tarefas em uma thread dedicada."""
+    logging.info("Agendador de memória iniciado.")
     while True:
         schedule.run_pending()
         time.sleep(1)
 
 def consolidate_daily_memories():
+    """Tarefa agendada para consolidar as memórias 'transfer' do dia anterior em uma memória 'daily'."""
     logging.info("AGENDADOR: Verificando memórias 'transfer' para consolidação diária.")
     today = datetime.now(TIMEZONE).date()
     yesterday = today - timedelta(days=1)
@@ -62,9 +64,11 @@ def consolidate_daily_memories():
     logging.info("AGENDADOR: Memória diária consolidada e memórias 'transfer' limpas.")
 
 def send_heartbeat():
+    """Tarefa agendada para atualizar o status do bot no painel, confirmando que está online."""
     database_handler.update_bot_status("Online")
 
 def send_chat_message(sock, message):
+    """Envia uma mensagem para o chat da Twitch."""
     try: 
         sock.send(f"PRIVMSG #{TTV_CHANNEL} :{message}\n".encode('utf-8'))
         logging.info(f"BOT > {message}")
@@ -72,6 +76,7 @@ def send_chat_message(sock, message):
         logging.error(f"Erro ao enviar mensagem: {e}")
 
 def summarize_and_clear_global_buffer():
+    """Sumariza o buffer global de chat e o limpa."""
     global global_chat_buffer
     if not global_chat_buffer: return
     
@@ -83,7 +88,9 @@ def summarize_and_clear_global_buffer():
     logging.info("Buffer de transferência sumarizado e limpo.")
     
 def cleanup_inactive_memory():
+    """Limpa a memória de curto prazo de usuários inativos e a consolida na memória de longo prazo."""
     now = datetime.now()
+    # Usar list() para criar uma cópia, permitindo a modificação do dicionário durante a iteração
     inactive_users = [user for user, data in list(short_term_memory.items()) if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)]
     for user in inactive_users:
         logging.info(f"Usuário {user} inativo. Sumarizando memória pessoal...")
@@ -92,6 +99,7 @@ def cleanup_inactive_memory():
         database_handler.save_long_term_memory(user, summary)
 
 def process_message(sock, raw_message):
+    """Processa uma única mensagem recebida do chat da Twitch."""
     try:
         if "PRIVMSG" not in raw_message: return
         
@@ -110,13 +118,14 @@ def process_message(sock, raw_message):
 
         msg_lower = message_content.lower()
         
+        # Lógica para o comando !learn
         learn_command = "!learn "
         if msg_lower.startswith(learn_command):
             if user_permission == 'master':
                 fact = message_content[len(learn_command):].strip()
                 if fact and database_handler.add_lorebook_entry(fact, user_info):
                     global LOREBOOK
-                    LOREBOOK = database_handler.get_current_lorebook()
+                    LOREBOOK = database_handler.get_current_lorebook() # Atualiza o lorebook em memória
                     send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
                 else:
                     send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
@@ -124,12 +133,14 @@ def process_message(sock, raw_message):
                 send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
             return
 
+        # Lógica para ativação do bot (!ask ou menção)
         activation_ask = "!ask "; activation_mention = f"@{BOT_NICK} "
         question = ""; is_activated = False
         if msg_lower.startswith(activation_ask): is_activated=True; question=message_content[len(activation_ask):].strip()
         elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
 
         if is_activated and question:
+            # Coleta de todos os contextos
             current_lorebook = database_handler.get_current_lorebook()
             long_term_memories = database_handler.search_long_term_memory(user_info)
             hierarchical_memories = database_handler.search_hierarchical_memory()
@@ -139,8 +150,9 @@ def process_message(sock, raw_message):
             initial_response = gemini_handler.generate_response_without_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories)
             
             final_response = initial_response
+            # Verifica se a IA deu uma resposta incerta para decidir se busca na web
             if any(keyword in initial_response.lower() for keyword in UNCERTAINTY_KEYWORDS):
-                logging.info(f"Resposta inicial indica incerteza. Realizando busca na web.")
+                logging.info("Resposta inicial indica incerteza. Realizando busca na web.")
                 web_context = gemini_handler.web_search(question)
                 if web_context:
                     final_response = gemini_handler.generate_response_with_search(question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, web_context)
@@ -149,21 +161,27 @@ def process_message(sock, raw_message):
 
             send_chat_message(sock, f"@{user_info} {final_response}")
             
+            # Atualiza a memória de curto prazo do usuário
             user_memory['history'].append({'role': 'user', 'parts': [question]})
             user_memory['history'].append({'role': 'model', 'parts': [final_response]})
             user_memory['last_interaction'] = datetime.now()
+            # Garante que a memória não cresça indefinidamente
             if len(user_memory['history']) > MAX_HISTORY_LENGTH * 2: # Mantem pares de user/model
                 user_memory['history'] = user_memory['history'][-MAX_HISTORY_LENGTH*2:]
             short_term_memory[user_info] = user_memory
             
     except Exception as e:
-        logging.error(f"Erro ao processar mensagem: {raw_message} | Erro: {e}")
+        logging.error(f"Erro ao processar mensagem: {raw_message} | Erro: {e}", exc_info=True)
 
 def listen_for_messages(sock):
-    buffer = ""; last_cleanup = time.time(); last_global_summary = time.time()
+    """Loop principal que escuta por novas mensagens no socket da Twitch."""
+    buffer = ""
+    last_cleanup = time.time()
+    last_global_summary = time.time()
     while True:
         try:
             now = time.time()
+            # Executa tarefas de limpeza e sumarização em intervalos de tempo
             if now - last_cleanup > 60: 
                 cleanup_inactive_memory()
                 last_cleanup = now
@@ -171,41 +189,47 @@ def listen_for_messages(sock):
                 summarize_and_clear_global_buffer()
                 last_global_summary = now
             
+            # Processa dados recebidos do servidor
             buffer += sock.recv(2048).decode('utf-8', errors='ignore')
             messages = buffer.split('\r\n')
-            buffer = messages.pop()
+            buffer = messages.pop() # Guarda qualquer mensagem incompleta para a próxima iteração
             for raw_message in messages:
                 if not raw_message: continue
+                # O servidor da Twitch envia PINGs para verificar se a conexão está ativa
                 if raw_message.startswith('PING'):
                     sock.send("PONG :tmi.twitch.tv\r\n".encode('utf-8'))
                     logging.info("PING recebido, PONG enviado.")
                     continue
                 process_message(sock, raw_message)
         except socket.timeout:
+            # É normal um timeout ocorrer se o chat estiver quieto. Apenas continue.
             continue
         except Exception as e:
             logging.error(f"Erro no loop de escuta: {e}")
-            time.sleep(15) # Pausa antes de tentar de novo
+            time.sleep(15) # Pausa antes de tentar de novo para evitar spam de erros
 
 def main():
+    """Função principal que inicializa e executa o bot."""
     global BOT_SETTINGS, LOREBOOK
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS: 
         logging.critical("Não foi possível carregar as configurações do bot. Encerrando."); return
+        
     gemini_handler.load_models_from_settings(BOT_SETTINGS)
     if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED: 
         logging.critical("Módulos essenciais (Gemini ou DB) falharam ao iniciar. Encerrando."); return
     
-    # Configuração do agendador
+    # Configuração do agendador de tarefas
     schedule.every(GLOBAL_BUFFER_MAX_MINUTES).minutes.do(summarize_and_clear_global_buffer)
-    schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories) # Rodar 15min depois da meia noite
+    schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories) # Roda 15min depois da meia noite
     schedule.every(2).minutes.do(send_heartbeat)
     
+    # Inicia o agendador em uma thread separada para não bloquear o bot
     scheduler_thread = threading.Thread(target=run_scheduler, name="SchedulerThread", daemon=True)
     scheduler_thread.start()
     
     sock = socket.socket()
-    sock.settimeout(60.0) # Timeout para evitar bloqueio eterno em recv
+    sock.settimeout(60.0) # Timeout para evitar bloqueio eterno em recv()
     try:
         send_heartbeat() # Atualiza o status para Online antes de conectar
         logging.info("Conectando ao servidor IRC da Twitch...")
@@ -224,12 +248,20 @@ def main():
     except KeyboardInterrupt:
         logging.info("Desligamento solicitado pelo usuário (Ctrl+C).")
     except Exception as e:
-        logging.critical(f"Erro fatal na conexão: {e}")
+        logging.critical(f"Erro fatal na conexão: {e}", exc_info=True)
     finally:
         logging.info("Desligando... Atualizando status para Offline.")
         database_handler.update_bot_status("Offline")
         sock.close()
         logging.info("Conexão fechada. Adeus!")
 
+# =========================================================================================
+# Este bloco `if __name__ == "__main__":` é a mudança crucial.
+# Ele garante que a função `main()` só será chamada quando você executa este arquivo
+# diretamente (ex: `python main_bot.py`).
+#
+# Quando o arquivo `app.py` importa o `main_bot.py`, este bloco NÃO é executado,
+# o que nos permite controlar o início do bot a partir do `app.py`.
+# =========================================================================================
 if __name__ == "__main__":
     main()
