@@ -36,6 +36,9 @@ MAX_HISTORY_LENGTH = 10
 UNCERTAINTY_KEYWORDS = ["não sei", "nao sei", "não tenho certeza", "não tenho acesso", "desconheço", "não consigo encontrar"]
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 
+
+# ... (Todas as outras funções como run_scheduler, send_chat_message, process_message, etc. permanecem EXATAMENTE IGUAIS) ...
+
 def run_scheduler():
     """Executa o loop do agendador de tarefas em uma thread dedicada."""
     log_to_panel("INFO", "Agendador de memória iniciado.", "SchedulerThread")
@@ -191,7 +194,11 @@ def listen_for_messages(sock):
             logging.error(f"Erro no loop de escuta: {e}")
             time.sleep(15)
 
+# =========================================================================================
+#                     ÚNICA MUDANÇA É AQUI
+# =========================================================================================
 def main():
+    """Função principal que inicializa e executa o bot."""
     global BOT_SETTINGS, LOREBOOK
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS:
@@ -201,15 +208,21 @@ def main():
     if not gemini_handler.GEMINI_ENABLED or not database_handler.DB_ENABLED:
         log_to_panel("CRITICAL", "Módulos Gemini ou DB falharam.", "BotThread")
         return
+    
+    # Configuração do agendador de tarefas
     schedule.every(GLOBAL_BUFFER_MAX_MINUTES).minutes.do(summarize_and_clear_global_buffer)
     schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
     schedule.every(2).minutes.do(send_heartbeat)
+    
     scheduler_thread = threading.Thread(target=run_scheduler, name="SchedulerThread", daemon=True)
     scheduler_thread.start()
+    
     sock = socket.socket()
     sock.settimeout(60.0)
     try:
-        send_heartbeat()
+        # A CHAMADA send_heartbeat() FOI REMOVIDA DAQUI PARA EVITAR CONDIÇÃO DE CORRIDA.
+        # O agendador irá chamar o heartbeat pela primeira vez em no máximo 2 minutos.
+        
         log_to_panel("INFO", "Conectando ao servidor IRC da Twitch...", "BotThread")
         sock.connect((HOST, PORT))
         log_to_panel("INFO", "Conectado. Autenticando...", "BotThread")
@@ -217,8 +230,13 @@ def main():
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
         time.sleep(2)
-        send_chat_message(sock, f"AI_Yuh (v2.5.0-panel-log) online.")
+        
+        # A primeira coisa que o bot faz é atualizar seu status ao entrar no chat.
+        database_handler.update_bot_status("Online")
+        send_chat_message(sock, f"AI_Yuh (v2.5.1-stable) online.")
+        
         listen_for_messages(sock)
+        
     except Exception as e:
         log_to_panel("CRITICAL", f"Erro fatal na conexão: {e}", "BotThread")
         logging.critical(f"Erro fatal na conexão: {e}", exc_info=True)
@@ -227,6 +245,7 @@ def main():
         database_handler.update_bot_status("Offline")
         sock.close()
         log_to_panel("INFO", "Conexão fechada.", "BotThread")
+# =========================================================================================
 
 if __name__ == "__main__":
     main()
