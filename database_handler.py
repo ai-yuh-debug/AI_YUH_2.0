@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from supabase import create_client, Client
 
@@ -26,7 +26,6 @@ def load_initial_data():
         settings = settings_response.data; print(f"Configurações carregadas.")
         lorebook_response = supabase_client.table('lorebook').select("entry").execute()
         lorebook = [item['entry'] for item in lorebook_response.data]
-        print(f"Lorebook carregado com {len(lorebook)} entradas.")
         return settings, lorebook
     except Exception as e:
         print(f"ERRO ao carregar dados iniciais: {e}"); return None, []
@@ -94,18 +93,16 @@ def delete_memories_by_ids(ids: list):
         print(f"Memórias antigas (IDs: {ids}) deletadas com sucesso.")
     except Exception as e:
         print(f"Erro ao deletar memórias antigas: {e}")
-        
+
 def get_current_lorebook() -> list[str]:
-    """Busca o estado mais recente do lorebook no banco de dados."""
     if not DB_ENABLED: return []
     try:
         response = supabase_client.table('lorebook').select("entry").execute()
         return [item['entry'] for item in response.data]
     except Exception as e:
         print(f"Erro ao buscar o lorebook atual: {e}"); return []
-        
+
 def delete_lorebook_entry(entry_id: int):
-    """Deleta uma entrada do lorebook com base no seu ID."""
     if not DB_ENABLED: return
     try:
         supabase_client.table('lorebook').delete().eq('id', entry_id).execute()
@@ -114,14 +111,25 @@ def delete_lorebook_entry(entry_id: int):
         print(f"Erro ao deletar entrada do lorebook (ID: {entry_id}): {e}")
 
 def update_bot_status(status: str):
-    """Atualiza o status do bot na tabela bot_status."""
     if not DB_ENABLED: return
     try:
-        supabase_client.table('bot_status').upsert({
-            "status_key": "bot_state",
+        supabase_client.table('bot_status').update({
             "status_value": status,
             "last_updated": datetime.now(pytz.utc).isoformat()
-        }).execute()
-        print(f"Status do bot atualizado para: {status}")
+        }).eq("status_key", "bot_state").execute()
     except Exception as e:
-        print(f"Erro ao atualizar status do bot: {e}")
+        pass
+
+def add_live_log(log_type: str, message: str):
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('live_logs').insert({"log_type": log_type, "message": message}).execute()
+    except Exception as e:
+        pass
+
+def add_live_chat_message(username: str, message: str):
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('live_chat').insert({"username": username, "message": message}).execute()
+    except Exception as e:
+        pass
