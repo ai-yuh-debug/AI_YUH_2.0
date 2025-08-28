@@ -22,6 +22,8 @@ try:
 except Exception as e:
     logging.critical(f"Não foi possível conectar ao Supabase. O bot não funcionará sem o DB. Erro: {e}")
 
+# ... (todas as outras funções como load_initial_data, get_user_permission, etc. permanecem EXATAMENTE IGUAIS) ...
+
 def load_initial_data():
     if not DB_ENABLED: return None, []
     try:
@@ -44,7 +46,6 @@ def get_user_permission(username: str) -> str:
         user_response = supabase_client.table('users').select("permission_level").eq("twitch_username", username.lower()).single().execute()
         return user_response.data.get('permission_level', 'normal') if user_response.data else 'normal'
     except Exception:
-        # Se single() falhar (nenhum usuário), retorna normal sem logar erro
         return 'normal'
 
 def add_lorebook_entry(entry: str, user: str) -> bool:
@@ -126,18 +127,34 @@ def delete_lorebook_entry(entry_id: int):
         logging.error(f"Erro ao deletar entrada do lorebook (ID: {entry_id}): {e}")
 
 # ==============================================================================
-#                      FUNÇÃO CORRIGIDA ABAIXO
+#                      NOVA VERSÃO DA FUNÇÃO
 # ==============================================================================
 def update_bot_status(status: str):
-    """Atualiza o status do bot na tabela bot_status usando upsert."""
+    """
+    Atualiza o status do bot de forma defensiva para evitar condições de corrida.
+    Primeiro tenta atualizar, se não conseguir, insere.
+    """
     if not DB_ENABLED: return
+
     try:
-        # UPSERT garante que a linha será criada se não existir, ou atualizada se já existir.
-        supabase_client.table('bot_status').upsert({
-            "status_key": "bot_state", # A chave que identifica a linha
+        # 1. Tenta ATUALIZAR a linha onde a chave é 'bot_state'
+        update_response = supabase_client.table('bot_status').update({
             "status_value": status,
             "last_updated": datetime.now(pytz.utc).isoformat()
-        }).execute()
+        }).eq('status_key', 'bot_state').execute()
+
+        # 2. Verifica se alguma linha foi de fato atualizada.
+        # Se a lista 'data' estiver vazia, significa que a linha não existia.
+        if not update_response.data:
+            # 3. A linha não existia, então agora podemos INSERI-LA com segurança.
+            supabase_client.table('bot_status').insert({
+                "status_key": "bot_state",
+                "status_value": status,
+                "last_updated": datetime.now(pytz.utc).isoformat()
+            }).execute()
+        
         logging.info(f"Status do bot atualizado para: {status}")
+
     except Exception as e:
+        # Captura qualquer outro erro que possa ocorrer.
         logging.error(f"Erro ao atualizar status do bot: {e}")
