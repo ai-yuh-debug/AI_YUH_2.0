@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
-from datetime import datetime
 import streamlit.components.v1 as components
 
 load_dotenv()
@@ -10,10 +9,7 @@ from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry
 
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
 
-# As funções de busca de dados em tempo real (get_bot_status, get_live_logs)
-# não são mais chamadas diretamente pelo Python, mas as de dados
-# de longa duração (settings, users, etc.) continuam sendo essenciais.
-
+# Funções de cache para dados que não mudam com frequência
 @st.cache_data(ttl=60)
 def get_settings():
     try: return supabase_client.table('settings').select("*").limit(1).single().execute().data
@@ -46,7 +42,7 @@ if not DB_ENABLED: st.error("ERRO GRAVE: Não foi possível conectar ao Supabase
 with st.container(border=True):
     st.subheader("Atividade ao Vivo e Status")
     
-    # Placeholders que o JavaScript irá preencher
+    # Placeholders para os elementos que o JavaScript irá preencher
     status_placeholder = st.empty()
     debug_placeholder = st.empty()
     
@@ -61,49 +57,45 @@ with st.container(border=True):
         st.markdown("##### 💬 Chat Processado")
         chat_log_placeholder = st.empty()
 
-# Componente HTML/JS para atualização em tempo real
-components.html(
-    f"""
-    <script type="text/javascript">
-    // Mapeia os placeholders do Streamlit para variáveis JavaScript
-    const statusPlaceholder = parent.document.getElementById('{status_placeholder._id}');
-    const debugPlaceholder = parent.document.getElementById('{debug_placeholder._id}');
-    const systemLogPlaceholder = parent.document.getElementById('{system_log_placeholder._id}');
-    const aiLogPlaceholder = parent.document.getElementById('{ai_log_placeholder._id}');
-    const chatLogPlaceholder = parent.document.getElementById('{chat_log_placeholder._id}');
+# ==============================================================================
+#                      COMPONENTE CORRIGIDO (DE NOVO)
+# ==============================================================================
+# Definimos o JavaScript como uma string bruta (r"...") para que o Python
+# não tente interpretar caracteres especiais como '\n'.
+# Usamos o método .format() para inserir os IDs, que é seguro.
+javascript_code = r"""
+<script type="text/javascript">
+    const statusPlaceholder = parent.document.getElementById('{status_id}');
+    const debugPlaceholder = parent.document.getElementById('{debug_id}');
+    const systemLogPlaceholder = parent.document.getElementById('{system_id}');
+    const aiLogPlaceholder = parent.document.getElementById('{ai_id}');
+    const chatLogPlaceholder = parent.document.getElementById('{chat_id}');
 
     function formatTimestamp(isoString) {{
         if (!isoString) return '';
         const date = new Date(isoString);
-        // Ajusta para o fuso horário de São Paulo (UTC-3)
-        const localDate = new Date(date.getTime());
-        return localDate.toLocaleTimeString('pt-BR', {{ timeZone: 'America/Sao_Paulo' }});
+        return date.toLocaleTimeString('pt-BR', {{ timeZone: 'America/Sao_Paulo' }});
     }}
 
     async function fetchData() {{
         try {{
-            // A API FastAPI está rodando na mesma máquina, na porta 10001
             const response = await fetch('http://localhost:10001/api/live_data');
             const data = await response.json();
 
-            // 1. Atualiza o Status Principal
             const statusText = data.status || 'Desconhecido';
             const statusColor = statusText.toLowerCase().includes('awake') ? 'green' : (statusText.toLowerCase().includes('asleep') ? 'orange' : 'red');
             statusPlaceholder.innerHTML = `<p><b>Status do Bot:</b> <span style="color:${{statusColor}}; font-weight:bold;">${{statusText}}</span></p>`;
 
-            // 2. Atualiza o Status de Depuração
             const debugText = data.debug_status || 'Aguardando depuração...';
             debugPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 100px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{debugText}}</textarea>`;
 
-            // 3. Filtra e Formata os Logs
             const allLogs = data.logs || [];
             const systemLogs = allLogs.filter(log => !['CHAT', 'IA PENSANDO'].includes(log.log_type));
             const aiLogs = allLogs.filter(log => log.log_type === 'IA PENSANDO');
             const chatLogs = allLogs.filter(log => log.log_type === 'CHAT');
 
-            const formatLogs = (logs) => logs.map(log => `${{formatTimestamp(log.created_at)}} | ${{log.log_type ? log.log_type + ':' : ''}} ${{log.message}`).join('\\n');
+            const formatLogs = (logs) => logs.map(log => `${{formatTimestamp(log.created_at)}} | ${{log.log_type ? log.log_type + ':' : ''}} ${{log.message}`).join('\n');
 
-            // 4. Atualiza as caixas de texto de log
             systemLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(systemLogs)}}</textarea>`;
             aiLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(aiLogs)}}</textarea>`;
             chatLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(chatLogs)}}</textarea>`;
@@ -114,15 +106,21 @@ components.html(
         }}
     }}
 
-    // Executa a função pela primeira vez e depois a cada 5 segundos
     fetchData();
     setInterval(fetchData, 5000);
-    </script>
-    """,
-    height=0,
+</script>
+""".format(
+    status_id=status_placeholder._id,
+    debug_id=debug_placeholder._id,
+    system_id=system_log_placeholder._id,
+    ai_id=ai_log_placeholder._id,
+    chat_id=chat_log_placeholder._id
 )
 
-# --- Seções de Configuração com Expanders (TUDO RESTAURADO) ---
+components.html(javascript_code, height=0)
+# ==============================================================================
+
+# --- Seções de Configuração com Expanders ---
 settings = get_settings()
 if settings:
     with st.expander("⚙️ Configurações Gerais da IA"):
