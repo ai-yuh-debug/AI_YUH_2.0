@@ -30,6 +30,9 @@ MEMORY_EXPIRATION_MINUTES = 5
 MAX_HISTORY_LENGTH = 10
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 
+# Nova variável de estado do bot
+BOT_STATE = 'ASLEEP'
+
 def consolidate_weekly_memories():
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'daily' para consolidação semanal.")
     daily_memories = database_handler.get_memories_for_consolidation("daily")
@@ -115,6 +118,7 @@ def run_scheduler():
         time.sleep(1)
 
 def consolidate_daily_memories():
+    if BOT_STATE == 'ASLEEP': return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'transfer' para consolidação diária.")
     today = datetime.now(TIMEZONE).date()
     yesterday = today - timedelta(days=1)
@@ -134,7 +138,7 @@ def consolidate_daily_memories():
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória diária consolidada.")
 
 def send_heartbeat():
-    database_handler.update_bot_status("Online")
+    database_handler.update_bot_status(f"Online ({BOT_STATE})")
 
 def send_chat_message(sock, message):
     try:
@@ -145,7 +149,7 @@ def send_chat_message(sock, message):
             if not clean_line: continue
             sock.send(f"PRIVMSG #{TTV_CHANNEL} :{clean_line}\n".encode('utf-8'))
             database_handler.add_live_log("CHAT", f"BOT > {clean_line}")
-            time.sleep(0.8)
+            time.sleep(1.2)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro ao enviar msg: {e}")
 
@@ -160,6 +164,7 @@ def summarize_and_clear_global_buffer():
     database_handler.add_live_log("STATUS", "Buffer global sumarizado e limpo.")
 
 def cleanup_inactive_memory():
+    if BOT_STATE == 'ASLEEP': return
     now = datetime.now()
     inactive_users = [user for user, data in list(short_term_memory.items()) if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)]
     for user in inactive_users:
@@ -169,6 +174,8 @@ def cleanup_inactive_memory():
         database_handler.save_long_term_memory(user, summary)
 
 def process_message(sock, raw_message):
+    global BOT_STATE
+
     try:
         if "PRIVMSG" not in raw_message: return
         source, _, message_body = raw_message.partition('PRIVMSG')
@@ -176,55 +183,79 @@ def process_message(sock, raw_message):
         message_content = message_body.split(':', 1)[1].strip()
         if user_info.lower() == BOT_NICK: return
         
-        database_handler.add_live_log("CHAT", f"{user_info}: {message_content}")
-        
-        global_chat_buffer.append({"user": user_info, "content": message_content, "timestamp": datetime.now(TIMEZONE)})
         user_permission = database_handler.get_user_permission(user_info)
-        if user_permission == 'blacklist': return
         msg_lower = message_content.lower()
         
-        learn_command = "!learn "
-        if msg_lower.startswith(learn_command):
-            if user_permission == 'master':
-                fact = message_content[len(learn_command):].strip()
-                if fact and database_handler.add_lorebook_entry(fact, user_info):
-                    global LOREBOOK
-                    LOREBOOK = database_handler.get_current_lorebook()
-                    send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
-                else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
-            else: send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
+        if BOT_STATE == 'ASLEEP':
+            if user_info.lower() == 'streamelements' and 'a mãe ta oooooooooon!' in msg_lower:
+                BOT_STATE = 'AWAKE'
+                database_handler.add_live_log("STATUS", "Bot ATIVADO pelo anúncio de live.")
+                send_chat_message(sock, "Alerta de live detectado. AI_Yuh ativada e pronta para interagir!")
+                return
+            
+            if msg_lower == '!awake' and user_permission == 'master':
+                BOT_STATE = 'AWAKE'
+                database_handler.add_live_log("STATUS", f"Bot ATIVADO manualmente por {user_info}.")
+                send_chat_message(sock, f"Entendido, {user_info}. Ativando sistemas. AI_Yuh está online.")
+                return
+            
             return
 
-        activation_ask = "!ask "; activation_mention = f"@{BOT_NICK} "
-        question = ""; is_activated = False
-        if msg_lower.startswith(activation_ask): is_activated=True; question=message_content[len(activation_ask):].strip()
-        elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
+        elif BOT_STATE == 'AWAKE':
+            if msg_lower == '!sleep' and user_permission == 'master':
+                BOT_STATE = 'ASLEEP'
+                database_handler.add_live_log("STATUS", f"Bot DESATIVADO manualmente por {user_info}.")
+                send_chat_message(sock, "Entendido. Desativando sistemas e entrando em modo de baixo consumo.")
+                return
 
-        if is_activated and question:
-            current_lorebook = database_handler.get_current_lorebook()
-            long_term_memories = database_handler.search_long_term_memory(user_info)
-            hierarchical_memories = database_handler.search_hierarchical_memory()
-            user_memory = short_term_memory.get(user_info, {"history": []})
+            if user_permission in ['blacklist', 'bot']:
+                return 
             
-            debug_string = (
-                f"Usuário: '{user_info}' | Pergunta: '{question[:50]}...'\n"
-                f"Contextos: Lorebook ({len(current_lorebook)}), Mem. Pessoal ({len(long_term_memories)}), Mem. Global ({len(hierarchical_memories)})"
-            )
-            database_handler.update_bot_debug_status(debug_string)
+            database_handler.add_live_log("CHAT", f"{user_info}: {message_content}")
+            global_chat_buffer.append({"user": user_info, "content": message_content, "timestamp": datetime.now(TIMEZONE)})
             
-            final_response = gemini_handler.generate_interactive_response(
-                question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories
-            )
-            
-            send_chat_message(sock, f"@{user_info} {final_response}")
-            
-            user_memory['history'].append({'role': 'user', 'parts': [question]})
-            user_memory['history'].append({'role': 'model', 'parts': [final_response]})
-            user_memory['last_interaction'] = datetime.now()
-            if len(user_memory['history']) > MAX_HISTORY_LENGTH * 2:
-                user_memory['history'] = user_memory['history'][-MAX_HISTORY_LENGTH*2:]
-            short_term_memory[user_info] = user_memory
-            
+            learn_command = "!learn "
+            if msg_lower.startswith(learn_command):
+                if user_permission == 'master':
+                    fact = message_content[len(learn_command):].strip()
+                    if fact and database_handler.add_lorebook_entry(fact, user_info):
+                        global LOREBOOK
+                        LOREBOOK = database_handler.get_current_lorebook()
+                        send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
+                    else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
+                else: send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
+                return
+
+            activation_ask = "!ask "; activation_mention = f"@{BOT_NICK} "
+            question = ""; is_activated = False
+            if msg_lower.startswith(activation_ask): is_activated=True; question=message_content[len(activation_ask):].strip()
+            elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
+
+            if is_activated and question:
+                current_lorebook = database_handler.get_current_lorebook()
+                long_term_memories = database_handler.search_long_term_memory(user_info)
+                hierarchical_memories = database_handler.search_hierarchical_memory()
+                user_memory = short_term_memory.get(user_info, {"history": []})
+                
+                debug_string = (
+                    f"Usuário: '{user_info}' | Pergunta: '{question[:50]}...'\n"
+                    f"Contextos: Lorebook ({len(current_lorebook)}), Mem. Pessoal ({len(long_term_memories)}), Mem. Global ({len(hierarchical_memories)})"
+                )
+                database_handler.update_bot_debug_status(debug_string)
+                
+                final_response = gemini_handler.generate_interactive_response(
+                    question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories
+                )
+                
+                send_chat_message(sock, f"@{user_info} {final_response}")
+                
+                user_memory['history'].append({'role': 'user', 'parts': [question]})
+                user_memory['history'].append({'role': 'model', 'parts': [final_response]})
+                user_memory['last_interaction'] = datetime.now()
+                if len(user_memory['history']) > MAX_HISTORY_LENGTH * 2:
+                    user_memory['history'] = user_memory['history'][-MAX_HISTORY_LENGTH*2:]
+                short_term_memory[user_info] = user_memory
+                
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro em process_message: {e}")
         logging.error(f"Erro em process_message: {e}", exc_info=True)
@@ -234,11 +265,12 @@ def listen_for_messages(sock):
     while True:
         try:
             now = time.time()
-            if now - last_cleanup > 60:
+            if BOT_STATE == 'AWAKE' and now - last_cleanup > 60:
                 cleanup_inactive_memory(); last_cleanup = now
-            if len(global_chat_buffer) >= GLOBAL_BUFFER_MAX_MESSAGES or now - last_global_summary > (GLOBAL_BUFFER_MAX_MINUTES * 60):
+            if BOT_STATE == 'AWAKE' and (len(global_chat_buffer) >= GLOBAL_BUFFER_MAX_MESSAGES or now - last_global_summary > (GLOBAL_BUFFER_MAX_MINUTES * 60)):
                 summarize_and_clear_global_buffer(); last_global_summary = now
-            buffer += sock.recv(2048).decode('utf-8', errors='ignore')
+            
+            buffer += sock.recv(4096).decode('utf-8', errors='ignore')
             messages = buffer.split('\r\n'); buffer = messages.pop()
             for raw_message in messages:
                 if not raw_message: continue
@@ -253,7 +285,7 @@ def listen_for_messages(sock):
             time.sleep(15)
 
 def main():
-    global BOT_SETTINGS, LOREBOOK
+    global BOT_SETTINGS, LOREBOOK, BOT_STATE
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS:
         logging.critical("Não foi possível carregar as configs do bot."); return
@@ -272,10 +304,11 @@ def main():
         sock.send(f"PASS {TTV_TOKEN}\n".encode('utf-8'))
         sock.send(f"NICK {BOT_NICK}\n".encode('utf-8'))
         sock.send(f"JOIN #{TTV_CHANNEL}\n".encode('utf-8'))
-        database_handler.add_live_log("STATUS", "Conectado e autenticado.")
+        database_handler.add_live_log("STATUS", "Conectado. Entrando em modo de baixo consumo.")
         time.sleep(2)
-        database_handler.update_bot_status("Online")
-        send_chat_message(sock, f"AI_Yuh (v3.2.0-stable) online.")
+        BOT_STATE = 'ASLEEP'
+        database_handler.update_bot_status(f"Online ({BOT_STATE})")
+        send_chat_message(sock, f"AI_Yuh (v3.5.2-stable) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
