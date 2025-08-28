@@ -1,3 +1,5 @@
+# requirements.txt
+
 # Versão final, leve e otimizada para o Render
 python-dotenv
 google-generativeai==0.8.5
