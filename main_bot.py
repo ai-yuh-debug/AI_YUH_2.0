@@ -38,7 +38,7 @@ def consolidate_weekly_memories():
         return
     memories_to_summarize = daily_memories[:7]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando para memória semanal...")
-    full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata')])
+    full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
     weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}")
     start_date = memories_to_summarize[0]['metadata']['date']
     end_date = memories_to_summarize[-1]['metadata']['date']
@@ -56,7 +56,7 @@ def consolidate_monthly_memories():
         return
     memories_to_summarize = weekly_memories[:4]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "4 memórias semanais encontradas. Sumarizando...")
-    full_text = "\n\n".join([f"Resumo da semana de {mem['metadata']['start_date']} a {mem['metadata']['end_date']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata')])
+    full_text = "\n\n".join([f"Resumo da semana de {mem['metadata']['start_date']} a {mem['metadata']['end_date']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('start_date')])
     monthly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do mês a seguir:\n{full_text}")
     month_name = datetime.fromisoformat(memories_to_summarize[0]['metadata']['start_date']).strftime('%B de %Y')
     metadata = {"month": month_name}
@@ -66,12 +66,39 @@ def consolidate_monthly_memories():
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória mensal consolidada e memórias semanais limpas.")
 
 def consolidate_yearly_memories():
-    # Implementação similar...
-    pass
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'monthly' para consolidação anual.")
+    monthly_memories = database_handler.get_memories_for_consolidation("monthly")
+    if len(monthly_memories) < 12:
+        database_handler.add_live_log("STATUS", f"Apenas {len(monthly_memories)}/12 memórias mensais. Aguardando.")
+        return
+    memories_to_summarize = monthly_memories[:12]
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "12 memórias mensais encontradas. Sumarizando...")
+    full_text = "\n\n".join([f"Resumo de {mem['metadata']['month']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('month')])
+    year_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do ano a seguir:\n{full_text}")
+    year_number = datetime.now(TIMEZONE).year - 1
+    metadata = {"year": year_number}
+    database_handler.save_hierarchical_memory("yearly", year_summary, metadata)
+    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
+    database_handler.delete_memories_by_ids(ids_to_delete)
+    database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória anual consolidada e memórias mensais limpas.")
 
 def consolidate_secular_memories():
-    # Implementação similar...
-    pass
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'yearly' para consolidação secular.")
+    yearly_memories = database_handler.get_memories_for_consolidation("yearly")
+    if len(yearly_memories) < 100:
+        database_handler.add_live_log("STATUS", f"Apenas {len(yearly_memories)}/100 memórias anuais. Aguardando.")
+        return
+    memories_to_summarize = yearly_memories[:100]
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "100 memórias anuais encontradas. Sumarizando para memória secular...")
+    full_text = "\n\n".join([f"Resumo do ano {mem['metadata']['year']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('year')])
+    century_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do século a seguir:\n{full_text}")
+    start_year = memories_to_summarize[0]['metadata']['year']
+    end_year = memories_to_summarize[-1]['metadata']['year']
+    metadata = {"start_year": start_year, "end_year": end_year}
+    database_handler.save_hierarchical_memory("century", century_summary, metadata)
+    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
+    database_handler.delete_memories_by_ids(ids_to_delete)
+    database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória secular consolidada e memórias anuais limpas.")
 
 def run_scheduler():
     logging.info("Agendador de memória e tarefas iniciado.")
@@ -80,6 +107,8 @@ def run_scheduler():
     schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
     schedule.every().monday.at("01:00", str(TIMEZONE)).do(consolidate_weekly_memories)
     schedule.every().day.at("01:30", str(TIMEZONE)).do(consolidate_monthly_memories)
+    schedule.every().day.at("02:00", str(TIMEZONE)).do(consolidate_yearly_memories)
+    schedule.every().day.at("02:30", str(TIMEZONE)).do(consolidate_secular_memories)
     schedule.every().day.at("03:00", str(TIMEZONE)).do(database_handler.delete_old_logs)
     while True:
         schedule.run_pending()
