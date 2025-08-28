@@ -2,14 +2,27 @@
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
-import streamlit.components.v1 as components
+from datetime import datetime
 
 load_dotenv()
-from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry
+from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs
 
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
 
-# Funções de cache para dados que não mudam com frequência
+@st.cache_data(ttl=10)
+def get_bot_status():
+    try:
+        response = supabase_client.table('bot_status').select("status_value").eq("id", 1).single().execute()
+        return response.data.get('status_value', 'Desconhecido')
+    except Exception: return "Desconhecido"
+
+@st.cache_data(ttl=10)
+def get_bot_debug_status():
+    try:
+        response = supabase_client.table('bot_status').select("status_value").eq("id", 23).single().execute()
+        return response.data.get('status_value', 'Aguardando depuração...')
+    except Exception: return "Aguardando depuração..."
+    
 @st.cache_data(ttl=60)
 def get_settings():
     try: return supabase_client.table('settings').select("*").limit(1).single().execute().data
@@ -38,89 +51,46 @@ def get_hierarchical_memory():
 st.title("🤖 Painel de Controle do AI_Yuh Bot")
 if not DB_ENABLED: st.error("ERRO GRAVE: Não foi possível conectar ao Supabase."); st.stop()
 
-# --- Seção de Atividade ao Vivo ---
 with st.container(border=True):
     st.subheader("Atividade ao Vivo e Status")
     
-    # Placeholders para os elementos que o JavaScript irá preencher
-    status_placeholder = st.empty()
-    debug_placeholder = st.empty()
+    col_status, col_debug = st.columns(2)
+    with col_status:
+        bot_status = get_bot_status()
+        status_color = {"Online": "green", "Offline": "red"}.get(bot_status, "gray")
+        st.markdown(f"**Status do Bot:** <span style='color:{status_color}; font-weight:bold;'>{bot_status}</span>", unsafe_allow_html=True)
     
+    with col_debug:
+        debug_status = get_bot_debug_status()
+        st.text_area("Última Ação da IA", debug_status, height=100, disabled=True, key="debug_status")
+
+    # Busca todos os logs recentes
+    log_entries = get_live_logs(limit=150)
+    
+    # Filtra os logs para cada coluna
+    system_logs = [log for log in log_entries if log.get('log_type') not in ['CHAT', 'IA PENSANDO']]
+    ai_thinking_logs = [log for log in log_entries if log.get('log_type') == 'IA PENSANDO']
+    chat_logs = [log for log in log_entries if log.get('log_type') == 'CHAT']
+
     col1, col2, col3 = st.columns(3)
+
     with col1:
         st.markdown("##### ⚙️ Logs do Sistema")
-        system_log_placeholder = st.empty()
+        system_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['log_type']}: {log['message']}" for log in system_logs])
+        st.text_area("System Logs", system_content, height=300, disabled=True, key="system_logs")
+
     with col2:
         st.markdown("##### 🧠 Pensamento da IA")
-        ai_log_placeholder = st.empty()
+        ai_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['message']}" for log in ai_thinking_logs])
+        st.text_area("AI Thinking", ai_content, height=300, disabled=True, key="ai_thinking")
+
     with col3:
         st.markdown("##### 💬 Chat Processado")
-        chat_log_placeholder = st.empty()
+        chat_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['message']}" for log in chat_logs])
+        st.text_area("Chat", chat_content, height=300, disabled=True, key="chat_logs")
 
-# ==============================================================================
-#                      COMPONENTE CORRIGIDO (DE NOVO)
-# ==============================================================================
-# Definimos o JavaScript como uma string bruta (r"...") para que o Python
-# não tente interpretar caracteres especiais como '\n'.
-# Usamos o método .format() para inserir os IDs, que é seguro.
-javascript_code = r"""
-<script type="text/javascript">
-    const statusPlaceholder = parent.document.getElementById('{status_id}');
-    const debugPlaceholder = parent.document.getElementById('{debug_id}');
-    const systemLogPlaceholder = parent.document.getElementById('{system_id}');
-    const aiLogPlaceholder = parent.document.getElementById('{ai_id}');
-    const chatLogPlaceholder = parent.document.getElementById('{chat_id}');
+    st.html("<meta http-equiv='refresh' content='7'>")
 
-    function formatTimestamp(isoString) {{
-        if (!isoString) return '';
-        const date = new Date(isoString);
-        return date.toLocaleTimeString('pt-BR', {{ timeZone: 'America/Sao_Paulo' }});
-    }}
-
-    async function fetchData() {{
-        try {{
-            const response = await fetch('http://localhost:10001/api/live_data');
-            const data = await response.json();
-
-            const statusText = data.status || 'Desconhecido';
-            const statusColor = statusText.toLowerCase().includes('awake') ? 'green' : (statusText.toLowerCase().includes('asleep') ? 'orange' : 'red');
-            statusPlaceholder.innerHTML = `<p><b>Status do Bot:</b> <span style="color:${{statusColor}}; font-weight:bold;">${{statusText}}</span></p>`;
-
-            const debugText = data.debug_status || 'Aguardando depuração...';
-            debugPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 100px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{debugText}}</textarea>`;
-
-            const allLogs = data.logs || [];
-            const systemLogs = allLogs.filter(log => !['CHAT', 'IA PENSANDO'].includes(log.log_type));
-            const aiLogs = allLogs.filter(log => log.log_type === 'IA PENSANDO');
-            const chatLogs = allLogs.filter(log => log.log_type === 'CHAT');
-
-            const formatLogs = (logs) => logs.map(log => `${{formatTimestamp(log.created_at)}} | ${{log.log_type ? log.log_type + ':' : ''}} ${{log.message}`).join('\n');
-
-            systemLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(systemLogs)}}</textarea>`;
-            aiLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(aiLogs)}}</textarea>`;
-            chatLogPlaceholder.innerHTML = `<textarea disabled style="width: 100%; height: 300px; font-family: monospace; background-color: #0E1117; color: #FAFAFA; border: 1px solid #262730; border-radius: 0.25rem;">${{formatLogs(chatLogs)}}</textarea>`;
-
-        }} catch (e) {{
-            console.error("Erro ao buscar dados da API:", e);
-            statusPlaceholder.innerHTML = `<p><b>Status do Bot:</b> <span style="color:red; font-weight:bold;">Erro de conexão com a API</span></p>`;
-        }}
-    }}
-
-    fetchData();
-    setInterval(fetchData, 5000);
-</script>
-""".format(
-    status_id=status_placeholder._id,
-    debug_id=debug_placeholder._id,
-    system_id=system_log_placeholder._id,
-    ai_id=ai_log_placeholder._id,
-    chat_id=chat_log_placeholder._id
-)
-
-components.html(javascript_code, height=0)
-# ==============================================================================
-
-# --- Seções de Configuração com Expanders ---
 settings = get_settings()
 if settings:
     with st.expander("⚙️ Configurações Gerais da IA"):
@@ -168,7 +138,7 @@ with st.expander("👥 Gerenciar Usuários"):
     st.subheader("Adicionar ou Atualizar Usuário")
     with st.form("user_form", clear_on_submit=True):
         username = st.text_input("Nome de Usuário (Twitch)").lower()
-        permission = st.selectbox("Nível de Permissão", ["normal", "master", "blacklist", "bot"])
+        permission = st.selectbox("Nível de Permissão", ["normal", "master", "blacklist"])
         if st.form_submit_button("Salvar Usuário"):
             if username:
                 try:
