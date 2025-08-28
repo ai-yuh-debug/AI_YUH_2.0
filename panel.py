@@ -241,11 +241,14 @@ elif page == "Configurações da IA":
         st.markdown("Selecione os modelos Gemini a serem usados e outras configurações do bot.")
 
         settings_data = {item['key']: item['value'] for item in fetch_data('settings')}
-        current_interaction_model = settings_data.get("interaction_model", "gemini-1.5-pro-latest")
-        current_archivist_model = settings_data.get("archivist_model", "gemini-1.5-flash-latest")
+        
+        # --- ALTERAÇÃO AQUI: Definindo os novos modelos como padrão no painel ---
+        current_interaction_model = settings_data.get("interaction_model", "gemini-2.5-flash")
+        current_archivist_model = settings_data.get("archivist_model", "gemini-2.5-flash")
         current_bot_prefix = settings_data.get("bot_prefix", "!ask")
         
-        available_models = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"]
+        # --- ALTERAÇÃO AQUI: Atualizando a lista de modelos disponíveis ---
+        available_models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash-latest", "gemini-pro"]
         
         interaction_model = st.selectbox(
             "Modelo de Interação (Conversa)", 

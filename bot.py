@@ -110,14 +110,18 @@ class Bot(commands.Bot):
         settings = database_handler.get_bot_settings()
         masters, blacklisted = database_handler.get_user_roles()
 
-        self.interaction_model_name = settings.get("interaction_model", "gemini-1.5-pro-latest")
-        self.archivist_model_name = settings.get("archivist_model", "gemini-1.5-flash-latest")
+        # --- ALTERAÇÃO AQUI: Definindo os novos modelos como padrão ---
+        self.interaction_model_name = settings.get("interaction_model", "gemini-2.5-flash")
+        self.archivist_model_name = settings.get("archivist_model", "gemini-2.5-flash")
+        
         self.system_prompt = settings.get("system_prompt", "Você é a AI_YUH, uma IA amigável na Twitch.")
         self.master_users = masters
         self.blacklisted_users = blacklisted
         self.bot_prefix = settings.get("bot_prefix", BOT_PREFIX)
 
         print("Configurações carregadas.")
+        print(f"  - Modelo de Interação Padrão/Carregado: {self.interaction_model_name}")
+        print(f"  - Modelo Arquivista Padrão/Carregado: {self.archivist_model_name}")
 
     def run_scheduler(self):
         """Loop que roda as tarefas agendadas."""
@@ -143,7 +147,6 @@ class Bot(commands.Bot):
         print(f"Buffer: {len(chat_buffer)}/{HOURLY_MEMORY_LIMIT}", end='\r')
 
         if len(chat_buffer) >= HOURLY_MEMORY_LIMIT:
-            # Roda a sumarização em uma thread separada para não bloquear o bot
             threading.Thread(target=summarize_hourly, args=(self.archivist_model,), daemon=True).start()
         
         await self.handle_commands(message)
@@ -153,7 +156,6 @@ class Bot(commands.Bot):
         if ctx.author.name.lower() in self.blacklisted_users: return
         print(f"\nComando !ask de {ctx.author.name}: {question}")
 
-        # Busca contextos em tempo real
         lore_context = database_handler.get_lorebook_entries()
         memory_items = database_handler.get_all_memories_for_context()
         memory_context = "\n".join([mem['content'] for mem in memory_items])
@@ -169,10 +171,8 @@ class Bot(commands.Bot):
         """Comando para recarregar as configurações do DB."""
         if ctx.author.name.lower() in self.master_users:
             self.load_configs()
-            # Recria os modelos com os novos nomes, se necessário
             self.interaction_model = gemini_handler.get_generative_model(self.interaction_model_name)
             self.archivist_model = gemini_handler.get_generative_model(self.archivist_model_name)
-            # Atualiza o prefixo do bot
             self.prefix = self.bot_prefix
             
             await ctx.send(f"@{ctx.author.name}, configurações e modelos de IA recarregados com sucesso!")
