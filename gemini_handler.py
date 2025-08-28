@@ -92,7 +92,6 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     #                      PROMPT RESTAURADO E APRIMORADO
     # ==============================================================================
     search_instructions = (
-        "\n\n**REGRA CRÍTICA DE BUSCA:** Sua primeira tarefa é avaliar a pergunta do usuário. Se a pergunta exigir "
         "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS:**\n"
         "1. **Para buscas gerais:** Se a pergunta do usuário exigir conhecimento externo ou atual (notícias, eventos, fatos, cotações, etc.) que não esteja na sua memória, sua PRIMEIRA E ÚNICA resposta DEVE ser `[SEARCH]termo de busca otimizado[/SEARCH]`.\n"
         "2. **Para ler uma página específica:** Se o usuário fornecer uma URL e pedir explicitamente para você ler ou resumir seu conteúdo, sua PRIMEIRA E ÚNICA resposta DEVE ser `[READ_URL]https://url.completa/aqui[/READ_URL]`.\n"
