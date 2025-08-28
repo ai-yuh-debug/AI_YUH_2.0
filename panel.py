@@ -1,32 +1,28 @@
 # -*- coding: utf-8 -*-
-# =========================================================================================
-#                   AI_YUH - Painel de Controle (Streamlit)
-# =========================================================================================
-
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 from dotenv import load_dotenv
-import time
+from datetime import datetime
 
 load_dotenv()
-from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry
+from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs
 
-# Importamos nosso estado compartilhado para acessar a fila de logs
-import shared_state
-
-# --- Configuração da Página ---
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
 
-# --- Funções de DB com Cache ---
-@st.cache_data(ttl=10) # Cache baixo para status
+@st.cache_data(ttl=10)
 def get_bot_status():
     try:
-        response = supabase_client.table('bot_status').select("status_value").eq("status_key", "bot_state").single().execute()
+        response = supabase_client.table('bot_status').select("status_value").eq("id", 1).single().execute()
         return response.data.get('status_value', 'Desconhecido')
     except Exception: return "Desconhecido"
 
-# ... (todas as outras funções get_* permanecem exatamente iguais) ...
+@st.cache_data(ttl=10)
+def get_bot_debug_status():
+    try:
+        response = supabase_client.table('bot_status').select("status_value").eq("id", 23).single().execute()
+        return response.data.get('status_value', 'Aguardando depuração...')
+    except Exception: return "Aguardando depuração..."
+    
 @st.cache_data(ttl=60)
 def get_settings():
     try: return supabase_client.table('settings').select("*").limit(1).single().execute().data
@@ -52,49 +48,59 @@ def get_hierarchical_memory():
     try: return pd.DataFrame(supabase_client.table('hierarchical_memory').select("*").order("created_at", desc=True).limit(100).execute().data)
     except Exception as e: st.error(f"Erro ao carregar memória hierárquica: {e}"); return pd.DataFrame()
 
-# --- Interface Principal ---
 st.title("🤖 Painel de Controle do AI_Yuh Bot")
+if not DB_ENABLED: st.error("ERRO GRAVE: Não foi possível conectar ao Supabase."); st.stop()
 
-if not DB_ENABLED:
-    st.error("ERRO GRAVE: Não foi possível conectar ao Supabase. Verifique o arquivo .env."); st.stop()
-
-# =========================================================================================
-#                      SEÇÃO DE LOGS AO VIVO MODIFICADA
-# =========================================================================================
 with st.container(border=True):
     st.subheader("Atividade ao Vivo e Status")
-    bot_status = get_bot_status()
-    status_color = {"Online": "green", "Offline": "red"}.get(bot_status, "gray")
-    st.markdown(f"Status do Bot: <span style='color:{status_color}; font-weight:bold;'>{bot_status}</span>", unsafe_allow_html=True)
-
-    # Pega os logs da nossa fila compartilhada
-    # Usamos list() para criar uma cópia e garantir que a exibição seja consistente.
-    # A lista é invertida com [::-1] para que as mensagens mais recentes apareçam no topo.
-    log_entries = list(shared_state.log_queue)[::-1]
-    log_content = "\n".join(log_entries)
     
-    st.text_area("Logs do Bot ao Vivo (últimas 100 linhas)", log_content, height=300, disabled=True)
+    col_status, col_debug = st.columns(2)
+    with col_status:
+        bot_status = get_bot_status()
+        status_color = {"Online": "green", "Offline": "red"}.get(bot_status, "gray")
+        st.markdown(f"**Status do Bot:** <span style='color:{status_color}; font-weight:bold;'>{bot_status}</span>", unsafe_allow_html=True)
     
-    # Este pequeno truque força o Streamlit a recarregar a página a cada 5 segundos,
-    # atualizando assim a caixa de logs.
-    st.html("<meta http-equiv='refresh' content='5'>")
-# =========================================================================================
+    with col_debug:
+        debug_status = get_bot_debug_status()
+        st.text_area("Última Ação da IA", debug_status, height=100, disabled=True, key="debug_status")
 
+    # Busca todos os logs recentes
+    log_entries = get_live_logs(limit=150)
+    
+    # Filtra os logs para cada coluna
+    system_logs = [log for log in log_entries if log.get('log_type') not in ['CHAT', 'IA PENSANDO']]
+    ai_thinking_logs = [log for log in log_entries if log.get('log_type') == 'IA PENSANDO']
+    chat_logs = [log for log in log_entries if log.get('log_type') == 'CHAT']
 
-# --- Seções de Configuração com Expanders ---
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("##### ⚙️ Logs do Sistema")
+        system_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['log_type']}: {log['message']}" for log in system_logs])
+        st.text_area("System Logs", system_content, height=300, disabled=True, key="system_logs")
+
+    with col2:
+        st.markdown("##### 🧠 Pensamento da IA")
+        ai_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['message']}" for log in ai_thinking_logs])
+        st.text_area("AI Thinking", ai_content, height=300, disabled=True, key="ai_thinking")
+
+    with col3:
+        st.markdown("##### 💬 Chat Processado")
+        chat_content = "\n".join([f"{pd.to_datetime(log['created_at']).tz_convert('America/Sao_Paulo').strftime('%H:%M:%S')} {log['message']}" for log in chat_logs])
+        st.text_area("Chat", chat_content, height=300, disabled=True, key="chat_logs")
+
+    st.html("<meta http-equiv='refresh' content='7'>")
+
 settings = get_settings()
 if settings:
-    # ... (todo o resto do seu painel continua exatamente igual) ...
     with st.expander("⚙️ Configurações Gerais da IA"):
         with st.form("general_settings_form"):
             st.subheader("Personalidade e Modelo")
             personality = st.text_area("📄 Personalidade", settings.get('personality_prompt', ''), height=200)
             lorebook_header = st.text_area("📖 Cabeçalho do Lorebook", settings.get('lorebook_prompt', ''), height=100)
-            
             col1_model, col2_model = st.columns(2)
             with col1_model: interaction_model = st.text_input("🤖 Modelo de Interação", settings.get('interaction_model', ''))
             with col2_model: archivist_model = st.text_input("🗄️ Modelo Arquivista", settings.get('archivist_model', ''))
-            
             st.subheader("Parâmetros de Geração")
             col1, col2 = st.columns(2)
             with col1:
@@ -103,7 +109,6 @@ if settings:
             with col2:
                 top_p = st.number_input("🎲 Top-P", 0.0, 1.0, float(settings.get('top_p', 1.0)), 0.05)
                 top_k = st.number_input("🎯 Top-K", 1, value=int(settings.get('top_k', 1)), step=1)
-
             if st.form_submit_button("Salvar Configurações Gerais", type="primary"):
                 try:
                     supabase_client.table('settings').update({
@@ -114,22 +119,17 @@ if settings:
                     st.success("Configurações Gerais salvas!"); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"Erro: {e}")
 
-# ... (todo o resto do seu código do painel.py continua aqui) ...
-
-with st.expander("🧠 Configurações de Memória Generativa"):
-    with st.form("memory_form"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            mem_exp = st.number_input("Expiração Mem. Pessoal (min)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
-        with col2:
-            glob_max_msg = st.number_input("Gatilho Sumarização (msgs)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
-        with col3:
-            glob_max_min = st.number_input("Gatilho Sumarização (min)", value=int(settings.get('global_buffer_max_minutes', 15)), min_value=1)
-        if st.form_submit_button("Salvar Configurações de Memória"):
-            try:
-                supabase_client.table('settings').update({'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg, 'global_buffer_max_minutes': glob_max_min}).eq('id', settings['id']).execute()
-                st.success("Configurações de Memória salvas!"); st.cache_data.clear()
-            except Exception as e: st.error(f"Erro: {e}")
+    with st.expander("🧠 Configurações de Memória Generativa"):
+        with st.form("memory_form"):
+            col1, col2, col3 = st.columns(3)
+            with col1: mem_exp = st.number_input("Expiração Mem. Pessoal (min)", value=int(settings.get('memory_expiration_minutes', 5)), min_value=1)
+            with col2: glob_max_msg = st.number_input("Gatilho Sumarização (msgs)", value=int(settings.get('global_buffer_max_messages', 40)), min_value=10)
+            with col3: glob_max_min = st.number_input("Gatilho Sumarização (min)", value=int(settings.get('global_buffer_max_minutes', 15)), min_value=1)
+            if st.form_submit_button("Salvar Configurações de Memória"):
+                try:
+                    supabase_client.table('settings').update({'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg, 'global_buffer_max_minutes': glob_max_min}).eq('id', settings['id']).execute()
+                    st.success("Configurações de Memória salvas!"); st.cache_data.clear()
+                except Exception as e: st.error(f"Erro: {e}")
 
 with st.expander("👥 Gerenciar Usuários"):
     users_df = get_users()
@@ -145,8 +145,7 @@ with st.expander("👥 Gerenciar Usuários"):
                     supabase_client.table('users').upsert({'twitch_username': username, 'permission_level': permission}).execute()
                     st.success(f"Usuário '{username}' salvo como '{permission}'."); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"Erro ao salvar usuário: {e}")
-            else:
-                st.warning("O nome de usuário não pode estar vazio.")
+            else: st.warning("O nome de usuário não pode estar vazio.")
 
 with st.expander("📚 Gerenciar Lorebook", expanded=True):
     lorebook_df = get_lorebook()
@@ -156,13 +155,10 @@ with st.expander("📚 Gerenciar Lorebook", expanded=True):
         if st.button("Deletar Entradas Selecionadas", type="primary"):
             entries_to_delete = edited_df[edited_df['delete']]
             if not entries_to_delete.empty:
-                for entry_id in entries_to_delete['id']:
-                    delete_lorebook_entry(entry_id)
+                for entry_id in entries_to_delete['id']: delete_lorebook_entry(entry_id)
                 st.success(f"{len(entries_to_delete)} entrada(s) deletada(s)!"); st.cache_data.clear(); st.rerun()
-            else:
-                st.warning("Nenhuma entrada selecionada para deletar.")
-    else:
-        st.info("Nenhum fato no Lorebook.")
+            else: st.warning("Nenhuma entrada selecionada para deletar.")
+    else: st.info("Nenhum fato no Lorebook.")
     st.subheader("Adicionar Novo Fato")
     with st.form("lorebook_form", clear_on_submit=True):
         entry = st.text_area("Fato a ser lembrado", height=100)
@@ -173,8 +169,7 @@ with st.expander("📚 Gerenciar Lorebook", expanded=True):
                     supabase_client.table('lorebook').insert({'entry': entry, 'created_by': author}).execute()
                     st.success("Fato adicionado!"); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"Erro ao adicionar fato: {e}")
-            else:
-                st.warning("O fato não pode estar vazio.")
+            else: st.warning("O fato não pode estar vazio.")
 
 with st.expander("🧠 Visualizar Memória Pessoal"):
     st.markdown("Resumos de conversas diretas entre o bot e usuários.")

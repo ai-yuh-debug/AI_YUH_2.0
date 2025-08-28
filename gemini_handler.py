@@ -3,6 +3,7 @@ import os
 import google.generativeai as genai
 from ddgs import DDGS
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+import database_handler
 
 GEMINI_ENABLED = False
 interaction_model = None
@@ -25,19 +26,17 @@ except Exception as e:
 def load_models_from_settings(settings: dict):
     global interaction_model, summarizer_model
     try:
-        interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest') # Mantido o flash para interações rápidas
-        archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest') # Flash também é ótimo para sumarização
-        
+        interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
+        archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
-        print(f"Modelo de interação '{interaction_model_name}' carregado.")
         summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
+        print(f"Modelo de interação '{interaction_model_name}' carregado.")
         print(f"Modelo arquivista '{archivist_model_name}' carregado.")
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
 def web_search_ddgs(query: str, num_results: int = 3) -> str:
-    """A função que executa a busca gratuita com DDGS."""
-    print(f"Executando busca DDGS por: '{query}'")
+    database_handler.add_live_log("IA PENSANDO", f"Executando busca DDGS por: '{query}'")
     try:
         results = DDGS().text(query, max_results=num_results)
         if not results: return "Nenhum resultado encontrado na web."
@@ -51,53 +50,48 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     full_history = []
     personality_prompt = settings.get('personality_prompt', '')
     search_instructions = (
-        "\n\n**Instruções de Busca:** Você tem a capacidade de pesquisar na internet. Se a pergunta do usuário exigir "
-        "conhecimento atual (notícias, eventos recentes, informações específicas de hoje, cotações, etc.) ou algo que você "
-        "não sabe com certeza, você DEVE responder **APENAS** com o texto `[SEARCH]termo de busca aqui[/SEARCH]`. Não adicione "
-        "nenhuma outra palavra ou desculpa. O sistema irá realizar a busca e te fornecer o contexto para a resposta final."
+        "\n\n**REGRA CRÍTICA DE BUSCA:** Sua primeira tarefa é avaliar a pergunta do usuário. Se a pergunta exigir "
+        "qualquer tipo de conhecimento externo ou atual (notícias, datas, fatos específicos que não estariam no seu Lorebook), "
+        "sua PRIMEIRA E ÚNICA resposta DEVE ser `[SEARCH]termo de busca otimizado[/SEARCH]`. "
+        "NÃO tente responder de outra forma. NÃO se desculpe. NÃO adicione texto extra. A falha em seguir esta regra resultará em um erro."
     )
     full_history.append({'role': 'user', 'parts': [personality_prompt + search_instructions]})
-    full_history.append({'role': 'model', 'parts': ["Entendido. Assumirei a personalidade e usarei estritamente `[SEARCH]query[/SEARCH]` quando precisar de informações externas."]})
+    full_history.append({'role': 'model', 'parts': ["REGRA COMPREENDIDA. Se for necessário conhecimento externo, minha única resposta inicial será `[SEARCH]query[/SEARCH]`."]})
     
     if lorebook:
         lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
         full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
-        full_history.append({'role': 'model', 'parts': ["Compreendido. Usarei este Lorebook como minha memória principal."]})
-
+        full_history.append({'role': 'model', 'parts': ["Lorebook assimilado."]})
     if long_term_memories:
         memories_text = "\n".join(f"- {mem}" for mem in long_term_memories)
         full_history.append({'role': 'user', 'parts': [f"Resumos de conversas passadas com este usuário:\n{memories_text}"]})
-        full_history.append({'role': 'model', 'parts': ["Ok."]})
-    
+        full_history.append({'role': 'model', 'parts': ["Memórias do usuário assimiladas."]})
     if hierarchical_memories:
-        hier_mem_text = "\n".join(f"- {mem}" for mem in hierarchical_memories)
+        hier_mem_text = "\n".join(f"- {mem['summary']}" for mem in hierarchical_memories) # Acessa a chave 'summary'
         full_history.append({'role': 'user', 'parts': [f"Resumos de eventos recentes no chat:\n{hier_mem_text}"]})
-        full_history.append({'role': 'model', 'parts': ["Ok."]})
+        full_history.append({'role': 'model', 'parts': ["Memórias do chat assimiladas."]})
         
     full_history.extend(history)
     chat = interaction_model.start_chat(history=full_history)
     
     try:
+        database_handler.add_live_log("IA PENSANDO", f"Pergunta para IA: '{question}'")
         response = chat.send_message(question, safety_settings=safety_settings)
         initial_text = response.text.strip()
+        database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{initial_text}'")
         
         if initial_text.startswith("[SEARCH]") and initial_text.endswith("[/SEARCH]"):
             query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
-            print(f"IA solicitou busca DDGS por: '{query}'")
-            
             search_context = web_search_ddgs(query)
+            database_handler.add_live_log("IA PENSANDO", f"Contexto da busca retornado para a IA.")
             
-            final_prompt_parts = [
-                f"Você perguntou sobre '{question}'. Aqui estão os resultados da sua pesquisa na internet:",
-                search_context,
-                "\nCom base nestes resultados, formule sua resposta final para o usuário."
-            ]
+            final_prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final para o usuário.", search_context]
             response = chat.send_message(final_prompt_parts, safety_settings=safety_settings)
             
-        if not response.parts:
-            return "Minha resposta foi bloqueada por segurança."
-            
-        return response.text.replace('*', '').replace('`', '').strip()
+        if not response.parts: return "Minha resposta foi bloqueada por segurança."
+        final_text = response.text.replace('*', '').replace('`', '').strip()
+        database_handler.add_live_log("IA PENSANDO", f"Resposta final para o usuário: '{final_text}'")
+        return final_text
         
     except Exception as e:
         print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
