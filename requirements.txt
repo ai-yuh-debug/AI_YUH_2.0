@@ -9,3 +9,4 @@ pandas
 schedule==1.2.2  # Nova biblioteca para agendamento
 pytz==2024.1     # Nova biblioteca para fusos horários
 streamlit-option-menu
+streamlit-extras # Nova biblioteca para widgets
