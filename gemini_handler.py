@@ -25,8 +25,8 @@ except Exception as e:
 def load_models_from_settings(settings: dict):
     global interaction_model, summarizer_model
     try:
-        interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
-        archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
+        interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest') # Mantido o flash para interações rápidas
+        archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest') # Flash também é ótimo para sumarização
         
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")

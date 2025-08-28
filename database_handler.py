@@ -86,10 +86,16 @@ def search_hierarchical_memory(limit: int = 3) -> list[str]:
     except Exception as e:
         logging.error(f"Erro ao buscar memória hierárquica: {e}"); return []
 
-def get_memories_for_consolidation(level: str, start_time: datetime, end_time: datetime) -> list:
+def get_memories_for_consolidation(level: str, start_time: datetime = None, end_time: datetime = None) -> list:
+    """Busca memórias para consolidação. Pode filtrar por tempo ou buscar todas de um nível."""
     if not DB_ENABLED: return []
     try:
-        response = supabase_client.table('hierarchical_memory').select("id, summary").eq("memory_level", level).gte("created_at", start_time.isoformat()).lte("created_at", end_time.isoformat()).execute()
+        query = supabase_client.table('hierarchical_memory').select("id, summary, metadata").eq("memory_level", level).order("metadata->>date", desc=False) # Ordena pela data dentro do JSON
+        
+        if start_time and end_time:
+            query = query.gte("created_at", start_time.isoformat()).lte("created_at", end_time.isoformat())
+            
+        response = query.execute()
         return response.data
     except Exception as e:
         logging.error(f"Erro ao buscar memórias '{level}' para consolidação: {e}"); return []
