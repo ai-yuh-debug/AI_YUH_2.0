@@ -1,20 +1,7 @@
 # -*- coding: utf-8 -*-
-
-# =========================================================================================
-#                   AI_YUH - Módulo de Gerenciamento do Banco de Dados
-# =========================================================================================
-# FASE 6: O Ciclo Completo da Memória e Busca na Web
-#
-# Autor: Seu Nome/Apelido
-# Versão: 1.2.0
-# Data: 26/08/2025
-#
-# Descrição: Adiciona funções para salvar e pesquisar na tabela de memória
-#            de longo prazo, completando o ciclo de vida da memória.
-#
-# =========================================================================================
-
 import os
+from datetime import datetime, timedelta
+import pytz
 from supabase import create_client, Client
 
 DB_ENABLED = False
@@ -36,58 +23,105 @@ def load_initial_data():
     try:
         print("Carregando dados iniciais do banco de dados...")
         settings_response = supabase_client.table('settings').select("*").limit(1).single().execute()
-        settings = settings_response.data
-        print(f"Configurações carregadas: {settings['interaction_model']}")
+        settings = settings_response.data; print(f"Configurações carregadas.")
         lorebook_response = supabase_client.table('lorebook').select("entry").execute()
         lorebook = [item['entry'] for item in lorebook_response.data]
         print(f"Lorebook carregado com {len(lorebook)} entradas.")
         return settings, lorebook
     except Exception as e:
-        print(f"ERRO ao carregar dados iniciais: {e}")
-        return None, []
+        print(f"ERRO ao carregar dados iniciais: {e}"); return None, []
 
 def get_user_permission(username: str) -> str:
     if not DB_ENABLED: return 'normal'
     try:
         user_response = supabase_client.table('users').select("permission_level").eq("twitch_username", username.lower()).execute()
-        if user_response.data:
-            return user_response.data[0]['permission_level']
-        return 'normal'
+        return user_response.data[0]['permission_level'] if user_response.data else 'normal'
     except Exception as e:
-        print(f"Erro ao verificar permissão para {username}: {e}")
-        return 'normal'
+        print(f"Erro ao verificar permissão para {username}: {e}"); return 'normal'
 
 def add_lorebook_entry(entry: str, user: str) -> bool:
     if not DB_ENABLED: return False
     try:
         response = supabase_client.table('lorebook').insert({"entry": entry, "created_by": user}).execute()
-        if response.data:
-            print(f"Nova entrada no Lorebook adicionada por {user}: {entry}")
-            return True
-        return False
+        return bool(response.data)
     except Exception as e:
-        print(f"Erro ao adicionar entrada no lorebook: {e}")
-        return False
+        print(f"Erro ao adicionar entrada no lorebook: {e}"); return False
 
 def save_long_term_memory(username: str, summary: str):
-    """Salva um resumo de conversa na tabela de memória de longo prazo."""
     if not DB_ENABLED: return
     try:
-        supabase_client.table('long_term_memory').insert({
-            "username": username,
-            "summary": summary,
-            "embedding": None
-        }).execute()
-        print(f"Memória de longo prazo salva para {username}.")
+        supabase_client.table('long_term_memory').insert({"username": username, "summary": summary}).execute()
+        print(f"Memória pessoal salva para {username}.")
     except Exception as e:
-        print(f"Erro ao salvar memória de longo prazo para {username}: {e}")
+        print(f"Erro ao salvar memória pessoal para {username}: {e}")
 
 def search_long_term_memory(username: str, limit: int = 5) -> list[str]:
-    """Busca as memórias de longo prazo mais recentes de um usuário."""
     if not DB_ENABLED: return []
     try:
         response = supabase_client.table('long_term_memory').select("summary").eq("username", username).order("created_at", desc=True).limit(limit).execute()
         return [item['summary'] for item in response.data]
     except Exception as e:
-        print(f"Erro ao buscar memória de longo prazo para {username}: {e}")
-        return []
+        print(f"Erro ao buscar memória pessoal para {username}: {e}"); return []
+
+def save_hierarchical_memory(level: str, summary: str, metadata: dict = None):
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('hierarchical_memory').insert({"memory_level": level, "summary": summary, "metadata": metadata}).execute()
+        print(f"Memória hierárquica (nível: {level}) salva com sucesso.")
+    except Exception as e:
+        print(f"Erro ao salvar memória hierárquica: {e}")
+
+def search_hierarchical_memory(limit: int = 3) -> list[str]:
+    if not DB_ENABLED: return []
+    try:
+        response = supabase_client.table('hierarchical_memory').select("summary").order("created_at", desc=True).limit(limit).execute()
+        return [item['summary'] for item in response.data]
+    except Exception as e:
+        print(f"Erro ao buscar memória hierárquica: {e}"); return []
+
+def get_memories_for_consolidation(level: str, start_time: datetime, end_time: datetime) -> list:
+    if not DB_ENABLED: return []
+    try:
+        response = supabase_client.table('hierarchical_memory').select("id, summary").eq("memory_level", level).gte("created_at", start_time.isoformat()).lte("created_at", end_time.isoformat()).execute()
+        return response.data
+    except Exception as e:
+        print(f"Erro ao buscar memórias '{level}' para consolidação: {e}"); return []
+
+def delete_memories_by_ids(ids: list):
+    if not DB_ENABLED or not ids: return
+    try:
+        supabase_client.table('hierarchical_memory').delete().in_('id', ids).execute()
+        print(f"Memórias antigas (IDs: {ids}) deletadas com sucesso.")
+    except Exception as e:
+        print(f"Erro ao deletar memórias antigas: {e}")
+        
+def get_current_lorebook() -> list[str]:
+    """Busca o estado mais recente do lorebook no banco de dados."""
+    if not DB_ENABLED: return []
+    try:
+        response = supabase_client.table('lorebook').select("entry").execute()
+        return [item['entry'] for item in response.data]
+    except Exception as e:
+        print(f"Erro ao buscar o lorebook atual: {e}"); return []
+        
+def delete_lorebook_entry(entry_id: int):
+    """Deleta uma entrada do lorebook com base no seu ID."""
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('lorebook').delete().eq('id', entry_id).execute()
+        print(f"Entrada do Lorebook (ID: {entry_id}) deletada com sucesso.")
+    except Exception as e:
+        print(f"Erro ao deletar entrada do lorebook (ID: {entry_id}): {e}")
+
+def update_bot_status(status: str):
+    """Atualiza o status do bot na tabela bot_status."""
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('bot_status').upsert({
+            "status_key": "bot_state",
+            "status_value": status,
+            "last_updated": datetime.now(pytz.utc).isoformat()
+        }).execute()
+        print(f"Status do bot atualizado para: {status}")
+    except Exception as e:
+        print(f"Erro ao atualizar status do bot: {e}")

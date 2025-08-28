@@ -1,8 +1,10 @@
 # Versão congelada para compatibilidade máxima (Python < 3.9)
-# Usa DDGS como único método de busca na web.
+# Inclui bibliotecas para o painel e o agendador de memória.
 python-dotenv
 google-generativeai==0.8.5
 supabase
 ddgs
 streamlit
 pandas
+schedule==1.2.2  # Nova biblioteca para agendamento
+pytz==2024.1     # Nova biblioteca para fusos horários
