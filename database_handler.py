@@ -81,20 +81,17 @@ def save_hierarchical_memory(level: str, summary: str, metadata: dict = None):
 def search_hierarchical_memory(limit: int = 3) -> list[str]:
     if not DB_ENABLED: return []
     try:
-        response = supabase_client.table('hierarchical_memory').select("summary").order("created_at", desc=True).limit(limit).execute()
-        return [item['summary'] for item in response.data]
+        response = supabase_client.table('hierarchical_memory').select("summary, metadata").order("created_at", desc=True).limit(limit).execute()
+        return response.data
     except Exception as e:
         logging.error(f"Erro ao buscar memória hierárquica: {e}"); return []
 
 def get_memories_for_consolidation(level: str, start_time: datetime = None, end_time: datetime = None) -> list:
-    """Busca memórias para consolidação. Pode filtrar por tempo ou buscar todas de um nível."""
     if not DB_ENABLED: return []
     try:
-        query = supabase_client.table('hierarchical_memory').select("id, summary, metadata").eq("memory_level", level).order("metadata->>date", desc=False) # Ordena pela data dentro do JSON
-        
+        query = supabase_client.table('hierarchical_memory').select("id, summary, metadata").eq("memory_level", level).order("created_at", desc=False)
         if start_time and end_time:
             query = query.gte("created_at", start_time.isoformat()).lte("created_at", end_time.isoformat())
-            
         response = query.execute()
         return response.data
     except Exception as e:
@@ -117,35 +114,44 @@ def delete_lorebook_entry(entry_id: int):
 def update_bot_status(status: str):
     if not DB_ENABLED: return
     try:
-        update_response = supabase_client.table('bot_status').update({"status_value": status,"last_updated": datetime.now(pytz.utc).isoformat()}).eq('status_key', 'bot_state').execute()
-        if not update_response.data:
-            supabase_client.table('bot_status').insert({"status_key": "bot_state","status_value": status,"last_updated": datetime.now(pytz.utc).isoformat()}).execute()
+        # Atualiza a linha de status principal (ID 1)
+        supabase_client.table('bot_status').update({"status_value": status}).eq('id', 1).execute()
         logging.info(f"Status do bot atualizado para: {status}")
     except Exception as e:
         logging.error(f"Erro ao atualizar status do bot: {e}")
 
-def add_log(level: str, message: str, thread_name: str):
+def update_bot_debug_status(debug_message: str):
+    """Atualiza a linha de status de depuração (ID 23, como na sua imagem)."""
     if not DB_ENABLED: return
     try:
-        supabase_client.table('logs').insert({"level": level, "message": message, "thread_name": thread_name}).execute()
+        supabase_client.table('bot_status').update({"status_value": debug_message}).eq('id', 23).execute()
+    except Exception as e:
+        logging.error(f"Erro ao atualizar status de debug do bot: {e}")
+
+def add_live_log(log_type: str, message: str):
+    """Adiciona uma nova entrada de log à sua tabela 'live_logs'."""
+    if not DB_ENABLED: return
+    try:
+        supabase_client.table('live_logs').insert({"log_type": log_type, "message": message}).execute()
     except Exception as e:
         print(f"ERRO DE LOGGING NO DB: {e}")
 
-def get_logs(limit: int = 100) -> list:
+def get_live_logs(limit: int = 150) -> list:
+    """Busca as últimas entradas de log da sua tabela 'live_logs'."""
     if not DB_ENABLED: return []
     try:
-        response = supabase_client.table('logs').select("*").order("created_at", desc=True).limit(limit).execute()
+        response = supabase_client.table('live_logs').select("*").order("created_at", desc=True).limit(limit).execute()
         return response.data
     except Exception as e:
         print(f"ERRO AO BUSCAR LOGS DO DB: {e}"); return []
 
 def delete_old_logs():
-    """Deleta logs com mais de 24 horas para manter a tabela limpa."""
+    """Deleta logs da tabela 'live_logs' com mais de 24 horas."""
     if not DB_ENABLED: return
     try:
         time_threshold = (datetime.now(pytz.utc) - timedelta(hours=24)).isoformat()
-        supabase_client.table('logs').delete().lt('created_at', time_threshold).execute()
-        logging.info("Limpeza de logs antigos executada com sucesso.")
-        add_log("INFO", "Limpeza de logs antigos executada.", "SchedulerThread")
+        supabase_client.table('live_logs').delete().lt('created_at', time_threshold).execute()
+        logging.info("Limpeza de logs antigos da tabela 'live_logs' executada.")
+        add_live_log("STATUS", "Limpeza de logs antigos executada.")
     except Exception as e:
         logging.error(f"Erro ao deletar logs antigos: {e}")
