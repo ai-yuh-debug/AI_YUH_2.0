@@ -1,11 +1,10 @@
-# requirements.txt
-
-# Versão final, leve e otimizada para o Render
+# Versão congelada para compatibilidade máxima (Python < 3.9)
+# Inclui bibliotecas para o painel e o agendador de memória.
 python-dotenv
 google-generativeai==0.8.5
 supabase
 ddgs
 streamlit
 pandas
-schedule==1.2.2
-pytz==2024.1
+schedule==1.2.2  # Nova biblioteca para agendamento
+pytz==2024.1     # Nova biblioteca para fusos horários
