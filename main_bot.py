@@ -29,9 +29,40 @@ GLOBAL_BUFFER_MAX_MINUTES = 15
 MEMORY_EXPIRATION_MINUTES = 5
 MAX_HISTORY_LENGTH = 10
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
-
-# Nova variável de estado do bot
 BOT_STATE = 'ASLEEP'
+
+def go_to_sleep():
+    """Função chamada pelo agendador para colocar o bot para dormir, se estiver acordado."""
+    global BOT_STATE
+    if BOT_STATE == 'AWAKE':
+        BOT_STATE = 'ASLEEP'
+        database_handler.add_live_log("STATUS", "Bot DESATIVADO automaticamente pelo agendador.")
+        logging.info("Bot entrando em modo ASLEEP por agendamento.")
+
+def run_scheduler():
+    logging.info("Agendador de memória e tarefas iniciado.")
+    database_handler.add_live_log("STATUS", "Agendador iniciado.")
+    
+    schedule.every(2).minutes.do(send_heartbeat)
+    schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
+    schedule.every().monday.at("01:00", str(TIMEZONE)).do(consolidate_weekly_memories)
+    schedule.every().day.at("01:30", str(TIMEZONE)).do(consolidate_monthly_memories)
+    schedule.every().day.at("02:00", str(TIMEZONE)).do(consolidate_yearly_memories)
+    schedule.every().day.at("02:30", str(TIMEZONE)).do(consolidate_secular_memories)
+    schedule.every().day.at("03:00", str(TIMEZONE)).do(database_handler.delete_old_logs)
+    
+    auto_sleep_time = BOT_SETTINGS.get('auto_sleep_time')
+    if auto_sleep_time and isinstance(auto_sleep_time, str) and len(auto_sleep_time) == 5:
+        try:
+            schedule.every().day.at(auto_sleep_time, str(TIMEZONE)).do(go_to_sleep)
+            database_handler.add_live_log("STATUS", f"Auto-Sleep agendado para as {auto_sleep_time} (UTC-3).")
+        except Exception as e:
+            database_handler.add_live_log("ERRO", f"Horário de Auto-Sleep inválido: {auto_sleep_time}. Erro: {e}")
+            logging.error(f"Horário de Auto-Sleep inválido: {auto_sleep_time}. Erro: {e}")
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 def consolidate_weekly_memories():
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'daily' para consolidação semanal.")
@@ -40,7 +71,7 @@ def consolidate_weekly_memories():
         database_handler.add_live_log("STATUS", f"Apenas {len(daily_memories)}/7 memórias diárias. Aguardando.")
         return
     memories_to_summarize = daily_memories[:7]
-    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando para memória semanal...")
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando...")
     full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
     weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}")
     start_date = memories_to_summarize[0]['metadata']['date']
@@ -103,20 +134,6 @@ def consolidate_secular_memories():
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória secular consolidada e memórias anuais limpas.")
 
-def run_scheduler():
-    logging.info("Agendador de memória e tarefas iniciado.")
-    database_handler.add_live_log("STATUS", "Agendador iniciado.")
-    schedule.every(2).minutes.do(send_heartbeat)
-    schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
-    schedule.every().monday.at("01:00", str(TIMEZONE)).do(consolidate_weekly_memories)
-    schedule.every().day.at("01:30", str(TIMEZONE)).do(consolidate_monthly_memories)
-    schedule.every().day.at("02:00", str(TIMEZONE)).do(consolidate_yearly_memories)
-    schedule.every().day.at("02:30", str(TIMEZONE)).do(consolidate_secular_memories)
-    schedule.every().day.at("03:00", str(TIMEZONE)).do(database_handler.delete_old_logs)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
 def consolidate_daily_memories():
     if BOT_STATE == 'ASLEEP': return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'transfer' para consolidação diária.")
@@ -129,7 +146,7 @@ def consolidate_daily_memories():
         database_handler.add_live_log("STATUS", "Nenhuma memória 'transfer' para consolidar hoje.")
         return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"{len(memories_to_consolidate)} memórias 'transfer' encontradas. Sumarizando...")
-    full_text = "\n\n".join([mem['summary'] for mem in memories_to_consolidate])
+    full_text = "\n\n".join([mem['summary'] for mem in memories_to_consolidate if mem.get('summary')])
     daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia {yesterday.strftime('%d/%m/%Y')}:\n{full_text}")
     metadata = {"date": yesterday.isoformat()}
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
@@ -155,11 +172,19 @@ def send_chat_message(sock, message):
 
 def summarize_and_clear_global_buffer():
     global global_chat_buffer
-    if not global_chat_buffer: return
+    MIN_MESSAGES_FOR_SUMMARY = 5
+    if len(global_chat_buffer) < MIN_MESSAGES_FOR_SUMMARY:
+        if global_chat_buffer: # Limpa se tiver poucas mensagens
+            database_handler.add_live_log("STATUS", f"Buffer com apenas {len(global_chat_buffer)} msgs. Descartando sem sumarizar.")
+            global_chat_buffer = []
+        return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando buffer global com {len(global_chat_buffer)} mensagens.")
     transcript = "\n".join(f"[{msg['timestamp'].strftime('%H:%M')}] {msg['user']}: {msg['content']}" for msg in global_chat_buffer)
     summary = gemini_handler.summarize_global_chat(transcript)
-    database_handler.save_hierarchical_memory("transfer", summary)
+    if "erro" not in summary.lower() and len(summary) > 10:
+        database_handler.save_hierarchical_memory("transfer", summary)
+    else:
+        database_handler.add_live_log("ERRO", f"Sumarização falhou ou retornou conteúdo inválido: '{summary}'")
     global_chat_buffer = []
     database_handler.add_live_log("STATUS", "Buffer global sumarizado e limpo.")
 
@@ -174,8 +199,7 @@ def cleanup_inactive_memory():
         database_handler.save_long_term_memory(user, summary)
 
 def process_message(sock, raw_message):
-    global BOT_STATE
-
+    global BOT_STATE, LOREBOOK
     try:
         if "PRIVMSG" not in raw_message: return
         source, _, message_body = raw_message.partition('PRIVMSG')
@@ -192,13 +216,11 @@ def process_message(sock, raw_message):
                 database_handler.add_live_log("STATUS", "Bot ATIVADO pelo anúncio de live.")
                 send_chat_message(sock, "Alerta de live detectado. AI_Yuh ativada e pronta para interagir!")
                 return
-            
             if msg_lower == '!awake' and user_permission == 'master':
                 BOT_STATE = 'AWAKE'
                 database_handler.add_live_log("STATUS", f"Bot ATIVADO manualmente por {user_info}.")
                 send_chat_message(sock, f"Entendido, {user_info}. Ativando sistemas. AI_Yuh está online.")
                 return
-            
             return
 
         elif BOT_STATE == 'AWAKE':
@@ -212,24 +234,28 @@ def process_message(sock, raw_message):
                 return 
             
             database_handler.add_live_log("CHAT", f"{user_info}: {message_content}")
-            global_chat_buffer.append({"user": user_info, "content": message_content, "timestamp": datetime.now(TIMEZONE)})
             
-            learn_command = "!learn "
-            if msg_lower.startswith(learn_command):
+            if message_content.startswith('!learn '):
                 if user_permission == 'master':
-                    fact = message_content[len(learn_command):].strip()
+                    fact = message_content[len('!learn '):].strip()
                     if fact and database_handler.add_lorebook_entry(fact, user_info):
-                        global LOREBOOK
                         LOREBOOK = database_handler.get_current_lorebook()
-                        send_chat_message(sock, f"@{user_info} Entendido. Adicionei o fato à minha base de conhecimento.")
-                    else: send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
-                else: send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
+                        send_chat_message(sock, f"@{user_info} Lorebook atualizado! Anotado.")
+                    else:
+                        send_chat_message(sock, f"@{user_info} Tive um problema para aprender isso.")
+                else:
+                    send_chat_message(sock, f"Desculpe @{user_info}, apenas mestres podem me ensinar.")
                 return
 
-            activation_ask = "!ask "; activation_mention = f"@{BOT_NICK} "
-            question = ""; is_activated = False
-            if msg_lower.startswith(activation_ask): is_activated=True; question=message_content[len(activation_ask):].strip()
-            elif msg_lower.startswith(activation_mention): is_activated=True; question=message_content[len(activation_mention):].strip()
+            question = ""
+            is_activated = False
+            if message_content.startswith('!ask '):
+                is_activated = True
+                question = message_content[len('!ask '):].strip()
+            elif message_content.lower().startswith(f"@{BOT_NICK} "):
+                is_activated = True
+                mention_index = msg_lower.find(f"@{BOT_NICK} ")
+                question = message_content[mention_index + len(f"@{BOT_NICK} "):].strip()
 
             if is_activated and question:
                 current_lorebook = database_handler.get_current_lorebook()
@@ -237,6 +263,11 @@ def process_message(sock, raw_message):
                 hierarchical_memories = database_handler.search_hierarchical_memory()
                 user_memory = short_term_memory.get(user_info, {"history": []})
                 
+                timezone_str = BOT_SETTINGS.get('timezone', 'America/Sao_Paulo')
+                try: user_timezone = pytz.timezone(timezone_str)
+                except pytz.UnknownTimeZoneError: user_timezone = pytz.timezone('America/Sao_Paulo')
+                current_time_str = datetime.now(user_timezone).strftime('%d de %B de %Y, %H:%M:%S (%Z)')
+
                 debug_string = (
                     f"Usuário: '{user_info}' | Pergunta: '{question[:50]}...'\n"
                     f"Contextos: Lorebook ({len(current_lorebook)}), Mem. Pessoal ({len(long_term_memories)}), Mem. Global ({len(hierarchical_memories)})"
@@ -244,7 +275,7 @@ def process_message(sock, raw_message):
                 database_handler.update_bot_debug_status(debug_string)
                 
                 final_response = gemini_handler.generate_interactive_response(
-                    question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories
+                    question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, current_time=current_time_str
                 )
                 
                 send_chat_message(sock, f"@{user_info} {final_response}")
@@ -255,7 +286,9 @@ def process_message(sock, raw_message):
                 if len(user_memory['history']) > MAX_HISTORY_LENGTH * 2:
                     user_memory['history'] = user_memory['history'][-MAX_HISTORY_LENGTH*2:]
                 short_term_memory[user_info] = user_memory
-                
+            else:
+                global_chat_buffer.append({"user": user_info, "content": message_content, "timestamp": datetime.now(TIMEZONE)})
+
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro em process_message: {e}")
         logging.error(f"Erro em process_message: {e}", exc_info=True)
@@ -308,7 +341,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v3.5.2-stable) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v3.7.0-qol) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")

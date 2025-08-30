@@ -114,14 +114,12 @@ def delete_lorebook_entry(entry_id: int):
 def update_bot_status(status: str):
     if not DB_ENABLED: return
     try:
-        # Atualiza a linha de status principal (ID 1)
         supabase_client.table('bot_status').update({"status_value": status}).eq('id', 1).execute()
         logging.info(f"Status do bot atualizado para: {status}")
     except Exception as e:
         logging.error(f"Erro ao atualizar status do bot: {e}")
 
 def update_bot_debug_status(debug_message: str):
-    """Atualiza a linha de status de depuração (ID 23, como na sua imagem)."""
     if not DB_ENABLED: return
     try:
         supabase_client.table('bot_status').update({"status_value": debug_message}).eq('id', 23).execute()
@@ -129,7 +127,6 @@ def update_bot_debug_status(debug_message: str):
         logging.error(f"Erro ao atualizar status de debug do bot: {e}")
 
 def add_live_log(log_type: str, message: str):
-    """Adiciona uma nova entrada de log à sua tabela 'live_logs'."""
     if not DB_ENABLED: return
     try:
         supabase_client.table('live_logs').insert({"log_type": log_type, "message": message}).execute()
@@ -137,7 +134,6 @@ def add_live_log(log_type: str, message: str):
         print(f"ERRO DE LOGGING NO DB: {e}")
 
 def get_live_logs(limit: int = 150) -> list:
-    """Busca as últimas entradas de log da sua tabela 'live_logs'."""
     if not DB_ENABLED: return []
     try:
         response = supabase_client.table('live_logs').select("*").order("created_at", desc=True).limit(limit).execute()
@@ -146,7 +142,6 @@ def get_live_logs(limit: int = 150) -> list:
         print(f"ERRO AO BUSCAR LOGS DO DB: {e}"); return []
 
 def delete_old_logs():
-    """Deleta logs da tabela 'live_logs' com mais de 24 horas."""
     if not DB_ENABLED: return
     try:
         time_threshold = (datetime.now(pytz.utc) - timedelta(hours=24)).isoformat()

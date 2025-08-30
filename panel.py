@@ -103,9 +103,15 @@ if settings:
             st.subheader("Personalidade e Modelo")
             personality = st.text_area("📄 Personalidade", settings.get('personality_prompt', ''), height=200)
             lorebook_header = st.text_area("📖 Cabeçalho do Lorebook", settings.get('lorebook_prompt', ''), height=100)
+            
             col1_model, col2_model = st.columns(2)
             with col1_model: interaction_model = st.text_input("🤖 Modelo de Interação", settings.get('interaction_model', ''))
             with col2_model: archivist_model = st.text_input("🗄️ Modelo Arquivista", settings.get('archivist_model', ''))
+
+            st.subheader("Configurações Regionais e de Automação")
+            timezone = st.text_input("Fuso Horário (formato IANA)", settings.get('timezone', 'America/Sao_Paulo'))
+            auto_sleep_time = st.text_input("Horário para Auto-Sleep (HH:MM, 24h, opcional)", settings.get('auto_sleep_time', ''))
+            
             st.subheader("Parâmetros de Geração")
             col1, col2 = st.columns(2)
             with col1:
@@ -114,12 +120,15 @@ if settings:
             with col2:
                 top_p = st.number_input("🎲 Top-P", 0.0, 1.0, float(settings.get('top_p', 1.0)), 0.05)
                 top_k = st.number_input("🎯 Top-K", 1, value=int(settings.get('top_k', 1)), step=1)
+
             if st.form_submit_button("Salvar Configurações Gerais", type="primary"):
                 try:
                     supabase_client.table('settings').update({
                         'personality_prompt': personality, 'lorebook_prompt': lorebook_header,
                         'interaction_model': interaction_model, 'archivist_model': archivist_model,
-                        'temperature': temp, 'top_p': top_p, 'top_k': top_k, 'max_output_tokens': max_tokens
+                        'temperature': temp, 'top_p': top_p, 'top_k': top_k, 'max_output_tokens': max_tokens,
+                        'timezone': timezone,
+                        'auto_sleep_time': auto_sleep_time
                     }).eq('id', settings['id']).execute()
                     st.success("Configurações Gerais salvas!"); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"Erro: {e}")

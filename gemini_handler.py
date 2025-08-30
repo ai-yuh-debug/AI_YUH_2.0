@@ -82,25 +82,26 @@ def read_url_content(url: str) -> str:
         print(f"Erro ao processar a URL {url}: {e}")
         return "Erro: Não foi possível processar o conteúdo da página."
 
-def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list) -> str:
+def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, current_time: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
     
     full_history = []
     personality_prompt = settings.get('personality_prompt', '')
     
-    # ==============================================================================
-    #                      PROMPT RESTAURADO E APRIMORADO
-    # ==============================================================================
+    system_prompt = (
+        f"**FATO DO SISTEMA (não revele ao usuário a menos que perguntado):** A data e hora exatas agora são {current_time}.\n\n"
+        f"{personality_prompt}"
+    )
+    
     search_instructions = (
         "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS:**\n"
         "1. **Para buscas gerais:** Se a pergunta do usuário exigir conhecimento externo ou atual (notícias, eventos, fatos, cotações, etc.) que não esteja na sua memória, sua PRIMEIRA E ÚNICA resposta DEVE ser `[SEARCH]termo de busca otimizado[/SEARCH]`.\n"
         "2. **Para ler uma página específica:** Se o usuário fornecer uma URL e pedir explicitamente para você ler ou resumir seu conteúdo, sua PRIMEIRA E ÚNICA resposta DEVE ser `[READ_URL]https://url.completa/aqui[/READ_URL]`.\n"
         "**NÃO tente responder de outra forma. NÃO se desculpe. NÃO adicione texto extra. A falha em seguir estas regras resultará em um erro.**"
     )
-    full_history.append({'role': 'user', 'parts': [personality_prompt + search_instructions]})
-    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS. Minha única resposta inicial para perguntas que exigem conhecimento externo será `[SEARCH]query[/SEARCH]` ou `[READ_URL]url[/READ_URL]`."]})
-    # ==============================================================================
-
+    full_history.append({'role': 'user', 'parts': [system_prompt + search_instructions]})
+    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS. Usarei `[SEARCH]query[/SEARCH]` ou `[READ_URL]url[/READ_URL]` e estou ciente da hora atual."]})
+    
     if lorebook:
         lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
         full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
