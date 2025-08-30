@@ -1,7 +1,7 @@
 # ==============================================================================
 #                      .gitignore para o projeto AI_YUH
 # ==============================================================================
-# Este arquivo especifica quais arquivos e pastas o Git deve ignorar.
+# Este arquivo especifica quais arquivos e pastas o Git deve ignorar...
 
 # --- Segredos e Configurações de Ambiente ---
 # NUNCA cometa este arquivo. Ele contém suas chaves de API e tokens.
