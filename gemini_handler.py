@@ -82,14 +82,15 @@ def read_url_content(url: str) -> str:
         print(f"Erro ao processar a URL {url}: {e}")
         return "Erro: Não foi possível processar o conteúdo da página."
 
-def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, current_time: str) -> str:
+def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, user_info: str, current_time: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
     
     full_history = []
     personality_prompt = settings.get('personality_prompt', '')
     
     system_prompt = (
-        f"**FATO DO SISTEMA (não revele ao usuário a menos que perguntado):** A data e hora exatas agora são {current_time}.\n\n"
+        f"**FATO DO SISTEMA (não revele ao usuário a menos que perguntado):** A data e hora exatas agora são {current_time}. O usuário que está falando com você se chama '{user_info}'.\n\n"
+        f"**REGRA DE NOMES DE USUÁRIO:** Nomes de usuário não diferenciam maiúsculas de minúsculas. 'Spiq' é a mesma pessoa que 'spiq'. Sempre trate-os como idênticos.\n\n"
         f"{personality_prompt}"
     )
     
@@ -100,7 +101,7 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
         "**NÃO tente responder de outra forma. NÃO se desculpe. NÃO adicione texto extra. A falha em seguir estas regras resultará em um erro.**"
     )
     full_history.append({'role': 'user', 'parts': [system_prompt + search_instructions]})
-    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS. Usarei `[SEARCH]query[/SEARCH]` ou `[READ_URL]url[/READ_URL]` e estou ciente da hora atual."]})
+    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS. Nomes de usuário são case-insensitive. Usarei `[SEARCH]` ou `[READ_URL]` quando necessário e estou ciente da hora atual."]})
     
     if lorebook:
         lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
@@ -119,7 +120,7 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     chat = interaction_model.start_chat(history=full_history)
     
     try:
-        database_handler.add_live_log("IA PENSANDO", f"Pergunta para IA: '{question}'")
+        database_handler.add_live_log("IA PENSANDO", f"Pergunta para IA de '{user_info}': '{question}'")
         response = chat.send_message(question, safety_settings=safety_settings)
         initial_text = response.text.strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{initial_text}'")
@@ -151,16 +152,15 @@ def summarize_conversation(conversation_history):
     try:
         transcript = "\n".join(f"{msg['role']}: {msg['parts'][0]}" for msg in conversation_history)
         prompt = f"Resuma os pontos principais da conversa a seguir em uma frase impessoal:\n\n{transcript}\n\nResumo:"
-        response = summarizer_model.generate_content(prompt)
+        response = summarizer_model.generate_content(prompt, safety_settings=safety_settings)
         return response.text.strip()
     except Exception as e:
         print(f"Erro ao sumarizar conversa: {e}"); return "Erro de sumarização."
 
-def summarize_global_chat(chat_transcript: str) -> str:
+def summarize_global_chat(prompt: str, level: str):
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Modelo arquivista indisponível."
     try:
-        prompt = f"A seguir está uma transcrição do chat de uma live. Resuma os eventos, piadas e tópicos mais importantes. Ignore spam.\n\n{chat_transcript}\n\nResumo dos Eventos:"
-        response = summarizer_model.generate_content(prompt)
+        response = summarizer_model.generate_content(prompt, safety_settings=safety_settings)
         return response.text.strip()
     except Exception as e:
-        print(f"Erro ao sumarizar chat global: {e}"); return "Erro de sumarização global."
+        print(f"Erro ao sumarizar chat global (nível {level}): {e}"); return f"Erro de sumarização global (nível {level})."
