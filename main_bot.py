@@ -74,7 +74,7 @@ def consolidate_weekly_memories():
         database_handler.add_live_log("STATUS", f"Apenas {len(daily_memories)}/7 memórias diárias. Aguardando.")
         return
     memories_to_summarize = daily_memories[:7]
-    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando...")
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando para memória semanal...")
     
     full_text = "\n\n".join([f"**Resumo de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:**\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
     prompt_para_ia = (
@@ -397,7 +397,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v3.9.0-prompt-refactor) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v3.9.1-stable) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
