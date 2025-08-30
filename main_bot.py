@@ -27,7 +27,7 @@ short_term_memory = {}
 global_chat_buffer = []
 GLOBAL_BUFFER_MAX_MESSAGES = 40
 GLOBAL_BUFFER_MAX_MINUTES = 15
-MEMORY_EXPIRATION_MINUTES = 5
+MEMORY_EXPIRATION_MINUTES = 10 # Aumentado para 10 minutos
 MAX_HISTORY_LENGTH = 10
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 BOT_STATE = 'ASLEEP'
@@ -43,18 +43,7 @@ def force_consolidate_daily():
     if BOT_STATE == 'ASLEEP':
         database_handler.add_live_log("ERRO", "O bot precisa estar AWAKE para forçar sumarização.")
         return
-    memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer")
-    if not memories_to_consolidate:
-        database_handler.add_live_log("STATUS", "Nenhuma memória 'transfer' encontrada para forçar sumarização.")
-        return
-    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Forçando sumarização diária de {len(memories_to_consolidate)} memórias 'transfer'.")
-    full_text = "\n\n".join([mem['summary'] for mem in memories_to_consolidate if mem.get('summary')])
-    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos:\n{full_text}", "diário (forçado)")
-    metadata = {"date": datetime.now(TIMEZONE).isoformat(), "forced": True}
-    database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
-    database_handler.delete_memories_by_ids(ids_to_delete)
-    database_handler.add_live_log("MEMÓRIA GLOBAL", "Sumarização diária forçada concluída.")
+    consolidate_daily_memories(force=True)
 
 def force_consolidate_weekly():
     if BOT_STATE == 'ASLEEP': return
@@ -115,7 +104,7 @@ def consolidate_weekly_memories(force=False):
         database_handler.add_live_log("STATUS", f"Apenas {len(daily_memories)}/7 memórias diárias. Aguardando.")
         return
     if not daily_memories:
-        database_handler.add_live_log("STATUS", "Nenhuma memória diária para forçar sumarização.")
+        database_handler.add_live_log("STATUS", "Nenhuma memória diária para sumarizar.")
         return
     memories_to_summarize = daily_memories[:7] if not force else daily_memories
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias diárias para memória semanal...")
@@ -123,7 +112,7 @@ def consolidate_weekly_memories(force=False):
     weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}", "semanal")
     start_date = memories_to_summarize[0]['metadata']['date']
     end_date = memories_to_summarize[-1]['metadata']['date']
-    metadata = {"start_date": start_date, "end_date": end_date}
+    metadata = {"start_date": start_date, "end_date": end_date, "forced": force}
     database_handler.save_hierarchical_memory("weekly", weekly_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
@@ -136,14 +125,14 @@ def consolidate_monthly_memories(force=False):
         database_handler.add_live_log("STATUS", f"Apenas {len(weekly_memories)}/4 memórias semanais. Aguardando.")
         return
     if not weekly_memories:
-        database_handler.add_live_log("STATUS", "Nenhuma memória semanal para forçar sumarização.")
+        database_handler.add_live_log("STATUS", "Nenhuma memória semanal para sumarizar.")
         return
     memories_to_summarize = weekly_memories[:4] if not force else weekly_memories
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias semanais...")
     full_text = "\n\n".join([f"Resumo da semana de {mem['metadata']['start_date']} a {mem['metadata']['end_date']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('start_date')])
     monthly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do mês a seguir:\n{full_text}", "mensal")
     month_name = datetime.fromisoformat(memories_to_summarize[0]['metadata']['start_date']).strftime('%B de %Y')
-    metadata = {"month": month_name}
+    metadata = {"month": month_name, "forced": force}
     database_handler.save_hierarchical_memory("monthly", monthly_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
@@ -156,14 +145,14 @@ def consolidate_yearly_memories(force=False):
         database_handler.add_live_log("STATUS", f"Apenas {len(monthly_memories)}/12 memórias mensais. Aguardando.")
         return
     if not monthly_memories:
-        database_handler.add_live_log("STATUS", "Nenhuma memória mensal para forçar sumarização.")
+        database_handler.add_live_log("STATUS", "Nenhuma memória mensal para sumarizar.")
         return
     memories_to_summarize = monthly_memories[:12] if not force else monthly_memories
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias mensais...")
     full_text = "\n\n".join([f"Resumo de {mem['metadata']['month']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('month')])
     year_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do ano a seguir:\n{full_text}", "anual")
     year_number = datetime.now(TIMEZONE).year - 1
-    metadata = {"year": year_number}
+    metadata = {"year": year_number, "forced": force}
     database_handler.save_hierarchical_memory("yearly", year_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
@@ -176,7 +165,7 @@ def consolidate_secular_memories(force=False):
         database_handler.add_live_log("STATUS", f"Apenas {len(yearly_memories)}/100 memórias anuais. Aguardando.")
         return
     if not yearly_memories:
-        database_handler.add_live_log("STATUS", "Nenhuma memória anual para forçar sumarização.")
+        database_handler.add_live_log("STATUS", "Nenhuma memória anual para sumarizar.")
         return
     memories_to_summarize = yearly_memories[:100] if not force else yearly_memories
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias anuais...")
@@ -184,27 +173,37 @@ def consolidate_secular_memories(force=False):
     century_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do século a seguir:\n{full_text}", "secular")
     start_year = memories_to_summarize[0]['metadata']['year']
     end_year = memories_to_summarize[-1]['metadata']['year']
-    metadata = {"start_year": start_year, "end_year": end_year}
+    metadata = {"start_year": start_year, "end_year": end_year, "forced": force}
     database_handler.save_hierarchical_memory("century", century_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória secular consolidada e memórias anuais limpas.")
 
-def consolidate_daily_memories():
-    if BOT_STATE == 'ASLEEP': return
+def consolidate_daily_memories(force=False):
+    if BOT_STATE == 'ASLEEP' and not force: return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "Verificando memórias 'transfer' para consolidação diária.")
-    today = datetime.now(TIMEZONE).date()
-    yesterday = today - timedelta(days=1)
-    start_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.min.time()))
-    end_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.max.time()))
-    memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer", start_of_yesterday, end_of_yesterday)
+    
+    memories_to_consolidate = []
+    if force:
+        memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer")
+    else:
+        today = datetime.now(TIMEZONE).date()
+        yesterday = today - timedelta(days=1)
+        start_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.min.time()))
+        end_of_yesterday = TIMEZONE.localize(datetime.combine(yesterday, datetime.max.time()))
+        memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer", start_of_yesterday, end_of_yesterday)
+        
     if not memories_to_consolidate:
-        database_handler.add_live_log("STATUS", "Nenhuma memória 'transfer' para consolidar hoje.")
+        database_handler.add_live_log("STATUS", "Nenhuma memória 'transfer' para consolidar.")
         return
+        
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"{len(memories_to_consolidate)} memórias 'transfer' encontradas. Sumarizando...")
     full_text = "\n\n".join([mem['summary'] for mem in memories_to_consolidate if mem.get('summary')])
-    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia {yesterday.strftime('%d/%m/%Y')}:\n{full_text}", "diário")
-    metadata = {"date": yesterday.isoformat()}
+    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos:\n{full_text}", "diário")
+    
+    metadata_date = datetime.now(TIMEZONE).isoformat() if force else (datetime.now(TIMEZONE).date() - timedelta(days=1)).isoformat()
+    metadata = {"date": metadata_date, "forced": force}
+    
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
     database_handler.delete_memories_by_ids(ids_to_delete)
@@ -248,11 +247,18 @@ def cleanup_inactive_memory():
     if BOT_STATE == 'ASLEEP': return
     now = datetime.now()
     inactive_users = [user for user, data in list(short_term_memory.items()) if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)]
+    
     for user in inactive_users:
-        database_handler.add_live_log("MEMÓRIA PESSOAL", f"Usuário {user} inativo. Sumarizando e limpando memória.")
-        user_memory_data = short_term_memory[user]
-        summary = gemini_handler.summarize_conversation(user_memory_data['history'])
-        database_handler.save_long_term_memory(user, summary)
+        user_permission = database_handler.get_user_permission(user)
+        
+        if user_permission == 'master':
+            database_handler.add_live_log("MEMÓRIA PESSOAL", f"Usuário master '{user}' inativo. Sumarizando e salvando memória.")
+            user_memory_data = short_term_memory[user]
+            summary = gemini_handler.summarize_conversation(user_memory_data['history'])
+            database_handler.save_long_term_memory(user, summary)
+        else:
+            database_handler.add_live_log("MEMÓRIA PESSOAL", f"Usuário normal '{user}' inativo. Limpando memória de curto prazo.")
+        
         del short_term_memory[user]
 
 def process_message(sock, raw_message):
@@ -318,8 +324,9 @@ def process_message(sock, raw_message):
                     is_activated = False
 
             if is_activated and question:
+                long_term_memories = database_handler.search_long_term_memory(user_info) # Busca para todos
+                
                 current_lorebook = database_handler.get_current_lorebook()
-                long_term_memories = database_handler.search_long_term_memory(user_info)
                 hierarchical_memories = database_handler.search_hierarchical_memory()
                 user_memory = short_term_memory.get(user_info, {"history": []})
                 
@@ -401,7 +408,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v4.0.1-final) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v4.0.4-final-fix) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
