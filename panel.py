@@ -3,7 +3,14 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime
-from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs, send_control_signal
+
+load_dotenv()
+# ==============================================================================
+#                      A LINHA QUE FALTAVA ESTÁ AQUI
+# ==============================================================================
+import database_handler
+# ==============================================================================
+from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs
 
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
 
