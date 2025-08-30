@@ -3,9 +3,7 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime
-
-load_dotenv()
-from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs
+from database_handler import supabase_client, DB_ENABLED, delete_lorebook_entry, get_live_logs, send_control_signal
 
 st.set_page_config(page_title="Painel AI_Yuh", page_icon="🤖", layout="wide")
 
@@ -147,6 +145,42 @@ if settings:
                     supabase_client.table('settings').update({'memory_expiration_minutes': mem_exp, 'global_buffer_max_messages': glob_max_msg, 'global_buffer_max_minutes': glob_max_min}).eq('id', settings['id']).execute()
                     st.success("Configurações de Memória salvas!"); st.cache_data.clear()
                 except Exception as e: st.error(f"Erro: {e}")
+
+with st.expander("🛠️ Controle Manual e Ações"):
+    st.warning("Ações nesta seção são executadas imediatamente. O bot pode levar até 1 minuto para responder ao sinal.")
+    
+    st.subheader("Forçar Sumarização de Memória")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        if st.button("Forçar Diária"):
+            if database_handler.send_control_signal("FORCE_DAILY_SUMMARY"):
+                st.success("Sinal para forçar sumarização diária enviado!")
+            else:
+                st.error("Falha ao enviar sinal.")
+    with col2:
+        if st.button("Forçar Semanal"):
+            if database_handler.send_control_signal("FORCE_WEEKLY_SUMMARY"):
+                st.success("Sinal para forçar sumarização semanal enviado!")
+            else:
+                st.error("Falha ao enviar sinal.")
+    with col3:
+        if st.button("Forçar Mensal"):
+            if database_handler.send_control_signal("FORCE_MONTHLY_SUMMARY"):
+                st.success("Sinal para forçar sumarização mensal enviado!")
+            else:
+                st.error("Falha ao enviar sinal.")
+    with col4:
+        if st.button("Forçar Anual"):
+            if database_handler.send_control_signal("FORCE_YEARLY_SUMMARY"):
+                st.success("Sinal para forçar sumarização anual enviado!")
+            else:
+                st.error("Falha ao enviar sinal.")
+    with col5:
+        if st.button("Forçar Secular"):
+            if database_handler.send_control_signal("FORCE_SECULAR_SUMMARY"):
+                st.success("Sinal para forçar sumarização secular enviado!")
+            else:
+                st.error("Falha ao enviar sinal.")
 
 with st.expander("👥 Gerenciar Usuários"):
     users_df = get_users()

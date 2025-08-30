@@ -39,10 +39,34 @@ def go_to_sleep():
         database_handler.add_live_log("STATUS", "Bot DESATIVADO automaticamente pelo agendador.")
         logging.info("Bot entrando em modo ASLEEP por agendamento.")
 
+def check_control_signals():
+    """Verifica e executa comandos enviados pelo painel."""
+    signals = database_handler.get_and_clear_signals()
+    if not signals:
+        return
+
+    for s in signals:
+        signal = s.get('signal')
+        database_handler.add_live_log("STATUS", f"Recebido sinal de controle: '{signal}'")
+        
+        if signal == 'FORCE_DAILY_SUMMARY':
+            consolidate_daily_memories()
+        elif signal == 'FORCE_WEEKLY_SUMMARY':
+            consolidate_weekly_memories()
+        elif signal == 'FORCE_MONTHLY_SUMMARY':
+            consolidate_monthly_memories()
+        elif signal == 'FORCE_YEARLY_SUMMARY':
+            consolidate_yearly_memories()
+        elif signal == 'FORCE_SECULAR_SUMMARY':
+            consolidate_secular_memories()
+        else:
+            database_handler.add_live_log("ERRO", f"Sinal de controle desconhecido: '{signal}'")
+
 def run_scheduler():
     logging.info("Agendador de memória e tarefas iniciado.")
     database_handler.add_live_log("STATUS", "Agendador iniciado.")
     
+    schedule.every().minute.do(check_control_signals)
     schedule.every(2).minutes.do(send_heartbeat)
     schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
     schedule.every().monday.at("01:00", str(TIMEZONE)).do(consolidate_weekly_memories)
@@ -75,16 +99,8 @@ def consolidate_weekly_memories():
         return
     memories_to_summarize = daily_memories[:7]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando...")
-    
-    full_text = "\n\n".join([f"**Resumo de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:**\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
-    prompt_para_ia = (
-        "Você é uma IA arquivista. Sua tarefa é ler os resumos diários de uma semana de lives e criar uma única narrativa coesa e envolvente sobre os eventos mais importantes. "
-        "Destaque os principais tópicos discutidos, eventos marcantes, piadas recorrentes e interações notáveis entre a streamer e o chat.\n\n"
-        "**Resumos Diários:**\n"
-        f"{full_text}"
-    )
-    weekly_summary = gemini_handler.summarize_global_chat(prompt_para_ia, "semanal")
-
+    full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
+    weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}", "semanal")
     start_date = memories_to_summarize[0]['metadata']['date']
     end_date = memories_to_summarize[-1]['metadata']['date']
     metadata = {"start_date": start_date, "end_date": end_date}
@@ -101,16 +117,8 @@ def consolidate_monthly_memories():
         return
     memories_to_summarize = weekly_memories[:4]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "4 memórias semanais encontradas. Sumarizando...")
-    
-    full_text = "\n\n".join([f"**Resumo da semana de {mem['metadata']['start_date']} a {mem['metadata']['end_date']}:**\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('start_date')])
-    prompt_para_ia = (
-        "Você é um historiador de comunidades online. Analise os resumos semanais a seguir e componha um resumo mensal que capture a essência do período. "
-        "Conecte os eventos entre as semanas, identifique temas ou narrativas que se desenvolveram ao longo do mês e destaque os momentos de maior impacto.\n\n"
-        "**Resumos Semanais:**\n"
-        f"{full_text}"
-    )
-    monthly_summary = gemini_handler.summarize_global_chat(prompt_para_ia, "mensal")
-
+    full_text = "\n\n".join([f"Resumo da semana de {mem['metadata']['start_date']} a {mem['metadata']['end_date']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('start_date')])
+    monthly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do mês a seguir:\n{full_text}", "mensal")
     month_name = datetime.fromisoformat(memories_to_summarize[0]['metadata']['start_date']).strftime('%B de %Y')
     metadata = {"month": month_name}
     database_handler.save_hierarchical_memory("monthly", monthly_summary, metadata)
@@ -126,17 +134,8 @@ def consolidate_yearly_memories():
         return
     memories_to_summarize = monthly_memories[:12]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "12 memórias mensais encontradas. Sumarizando...")
-    
-    full_text = "\n\n".join([f"**Resumo de {mem['metadata']['month']}:**\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('month')])
-    prompt_para_ia = (
-        "Você é um cronista encarregado de documentar a história de uma comunidade. Os textos a seguir são resumos mensais de um ano inteiro de atividades. "
-        "Sua tarefa é sintetizar esses doze meses em um único resumo anual coeso. Foque nas grandes narrativas, nas mudanças significativas da comunidade, "
-        "nos personagens (usuários) que mais se destacaram e nos eventos que definiram o ano.\n\n"
-        "**Resumos Mensais:**\n"
-        f"{full_text}"
-    )
-    year_summary = gemini_handler.summarize_global_chat(prompt_para_ia, "anual")
-
+    full_text = "\n\n".join([f"Resumo de {mem['metadata']['month']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('month')])
+    year_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do ano a seguir:\n{full_text}", "anual")
     year_number = datetime.now(TIMEZONE).year - 1
     metadata = {"year": year_number}
     database_handler.save_hierarchical_memory("yearly", year_summary, metadata)
@@ -152,17 +151,8 @@ def consolidate_secular_memories():
         return
     memories_to_summarize = yearly_memories[:100]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "100 memórias anuais encontradas. Sumarizando para memória secular...")
-    
-    full_text = "\n\n".join([f"**Resumo do ano {mem['metadata']['year']}:**\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('year')])
-    prompt_para_ia = (
-        "Sua tarefa é de proporções épicas. Você é um historiador do futuro, analisando um século de registros de uma comunidade digital. "
-        "Leia os resumos anuais a seguir e destile a essência de 100 anos em uma crônica secular. Identifique as eras, as grandes mudanças de paradigma, "
-        "as lendas (usuários que marcaram época) e o legado duradouro desta comunidade para a história da internet.\n\n"
-        "**Resumos Anuais:**\n"
-        f"{full_text}"
-    )
-    century_summary = gemini_handler.summarize_global_chat(prompt_para_ia, "secular")
-
+    full_text = "\n\n".join([f"Resumo do ano {mem['metadata']['year']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('year')])
+    century_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do século a seguir:\n{full_text}", "secular")
     start_year = memories_to_summarize[0]['metadata']['year']
     end_year = memories_to_summarize[-1]['metadata']['year']
     metadata = {"start_year": start_year, "end_year": end_year}
@@ -183,19 +173,11 @@ def consolidate_daily_memories():
         database_handler.add_live_log("STATUS", "Nenhuma memória 'transfer' para consolidar hoje.")
         return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"{len(memories_to_consolidate)} memórias 'transfer' encontradas. Sumarizando...")
-    
     full_text = "\n\n".join([mem['summary'] for mem in memories_to_consolidate if mem.get('summary')])
-    prompt_para_ia = (
-        f"Você é uma IA assistente de um canal da Twitch, encarregada de criar um diário de bordo. A seguir estão vários fragmentos de conversas e eventos que ocorreram ao longo do dia {yesterday.strftime('%d/%m/%Y')}. "
-        "Sua tarefa é ler todos os fragmentos e escrever um único parágrafo coeso que resuma os acontecimentos mais importantes do dia. Foque nos principais jogos jogados, nos assuntos mais discutidos, em piadas ou memes que surgiram e em qualquer evento especial que tenha ocorrido.\n\n"
-        "**Fragmentos do Dia:**\n"
-        f"{full_text}"
-    )
-    daily_summary = gemini_handler.summarize_global_chat(prompt_para_ia, "diário")
-
+    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia {yesterday.strftime('%d/%m/%Y')}:\n{full_text}", "diário")
     metadata = {"date": yesterday.isoformat()}
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
+    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória diária consolidada.")
 
@@ -225,15 +207,7 @@ def summarize_and_clear_global_buffer():
         return
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando buffer global com {len(global_chat_buffer)} mensagens.")
     transcript = "\n".join(f"[{msg['timestamp'].strftime('%H:%M')}] {msg['user']}: {msg['content']}" for msg in global_chat_buffer)
-    
-    prompt_para_ia = (
-        "Você é uma IA que observa um chat da Twitch. A seguir está uma transcrição de um curto período de tempo (aproximadamente 15-30 minutos). "
-        "Sua tarefa é criar um resumo conciso em uma ou duas frases, capturando o tópico principal da conversa ou o evento mais notável. Ignore saudações genéricas e spam.\n\n"
-        "**Transcrição do Chat:**\n"
-        f"{transcript}"
-    )
-    summary = gemini_handler.summarize_global_chat(prompt_para_ia, "transferência")
-    
+    summary = gemini_handler.summarize_global_chat(transcript, "transferência")
     if "erro" not in summary.lower() and len(summary) > 10:
         database_handler.save_hierarchical_memory("transfer", summary)
     else:
