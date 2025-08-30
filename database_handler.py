@@ -150,3 +150,30 @@ def delete_old_logs():
         add_live_log("STATUS", "Limpeza de logs antigos executada.")
     except Exception as e:
         logging.error(f"Erro ao deletar logs antigos: {e}")
+
+def send_control_signal(signal: str):
+    """Envia um comando para a tabela de sinais para o bot executar."""
+    if not DB_ENABLED: return False
+    try:
+        supabase_client.table('control_signals').insert({"signal": signal}).execute()
+        logging.info(f"Sinal de controle '{signal}' enviado com sucesso.")
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao enviar sinal de controle '{signal}': {e}")
+        return False
+
+def get_and_clear_signals() -> list:
+    """Busca todos os sinais não processados e os marca como processados."""
+    if not DB_ENABLED: return []
+    try:
+        response = supabase_client.table('control_signals').select("id, signal").eq("processed", False).execute()
+        signals = response.data
+        
+        if signals:
+            signal_ids = [s['id'] for s in signals]
+            supabase_client.table('control_signals').update({"processed": True}).in_("id", signal_ids).execute()
+            
+        return signals
+    except Exception as e:
+        logging.error(f"Erro ao buscar e limpar sinais de controle: {e}")
+        return []

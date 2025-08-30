@@ -74,7 +74,7 @@ def consolidate_weekly_memories():
         database_handler.add_live_log("STATUS", f"Apenas {len(daily_memories)}/7 memórias diárias. Aguardando.")
         return
     memories_to_summarize = daily_memories[:7]
-    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando para memória semanal...")
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando...")
     
     full_text = "\n\n".join([f"**Resumo de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:**\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
     prompt_para_ia = (
