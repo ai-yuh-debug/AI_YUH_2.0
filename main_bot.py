@@ -32,7 +32,7 @@ TIMEZONE = pytz.timezone('America/Sao_Paulo')
 BOT_STATE = 'ASLEEP'
 
 def go_to_sleep():
-    """Função chamada pelo agendador para colocar o bot para dormir, se estiver acordado."""
+    """Função chamada pelo agendador para colocar o bot para dormir."""
     global BOT_STATE
     if BOT_STATE == 'AWAKE':
         BOT_STATE = 'ASLEEP'
@@ -51,11 +51,15 @@ def run_scheduler():
     schedule.every().day.at("02:30", str(TIMEZONE)).do(consolidate_secular_memories)
     schedule.every().day.at("03:00", str(TIMEZONE)).do(database_handler.delete_old_logs)
     
+    # Lógica de agendamento do Auto-Sleep Corrigida
+    auto_sleep_enabled = BOT_SETTINGS.get('auto_sleep_enabled', False)
     auto_sleep_time = BOT_SETTINGS.get('auto_sleep_time')
-    if auto_sleep_time and isinstance(auto_sleep_time, str) and len(auto_sleep_time) == 5:
+
+    if auto_sleep_enabled and auto_sleep_time and isinstance(auto_sleep_time, str) and len(auto_sleep_time) == 5:
         try:
             schedule.every().day.at(auto_sleep_time, str(TIMEZONE)).do(go_to_sleep)
             database_handler.add_live_log("STATUS", f"Auto-Sleep agendado para as {auto_sleep_time} (UTC-3).")
+            logging.info(f"Auto-Sleep agendado para as {auto_sleep_time} (UTC-3).")
         except Exception as e:
             database_handler.add_live_log("ERRO", f"Horário de Auto-Sleep inválido: {auto_sleep_time}. Erro: {e}")
             logging.error(f"Horário de Auto-Sleep inválido: {auto_sleep_time}. Erro: {e}")
@@ -71,7 +75,7 @@ def consolidate_weekly_memories():
         database_handler.add_live_log("STATUS", f"Apenas {len(daily_memories)}/7 memórias diárias. Aguardando.")
         return
     memories_to_summarize = daily_memories[:7]
-    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando...")
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", "7 memórias diárias encontradas. Sumarizando para memória semanal...")
     full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
     weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}")
     start_date = memories_to_summarize[0]['metadata']['date']
@@ -150,7 +154,7 @@ def consolidate_daily_memories():
     daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos do dia {yesterday.strftime('%d/%m/%Y')}:\n{full_text}")
     metadata = {"date": yesterday.isoformat()}
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
+    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória diária consolidada.")
 
@@ -174,7 +178,7 @@ def summarize_and_clear_global_buffer():
     global global_chat_buffer
     MIN_MESSAGES_FOR_SUMMARY = 5
     if len(global_chat_buffer) < MIN_MESSAGES_FOR_SUMMARY:
-        if global_chat_buffer: # Limpa se tiver poucas mensagens
+        if global_chat_buffer:
             database_handler.add_live_log("STATUS", f"Buffer com apenas {len(global_chat_buffer)} msgs. Descartando sem sumarizar.")
             global_chat_buffer = []
         return
@@ -341,7 +345,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v3.7.0-qol) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v3.7.1-stable) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")

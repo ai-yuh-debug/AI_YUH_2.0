@@ -110,7 +110,9 @@ if settings:
 
             st.subheader("Configurações Regionais e de Automação")
             timezone = st.text_input("Fuso Horário (formato IANA)", settings.get('timezone', 'America/Sao_Paulo'))
-            auto_sleep_time = st.text_input("Horário para Auto-Sleep (HH:MM, 24h, opcional)", settings.get('auto_sleep_time', ''))
+            
+            auto_sleep_enabled = st.checkbox("Habilitar Auto-Sleep Agendado", value=settings.get('auto_sleep_enabled', False))
+            auto_sleep_time = st.text_input("Horário para Auto-Sleep (HH:MM, 24h)", settings.get('auto_sleep_time', '03:00'))
             
             st.subheader("Parâmetros de Geração")
             col1, col2 = st.columns(2)
@@ -128,9 +130,10 @@ if settings:
                         'interaction_model': interaction_model, 'archivist_model': archivist_model,
                         'temperature': temp, 'top_p': top_p, 'top_k': top_k, 'max_output_tokens': max_tokens,
                         'timezone': timezone,
+                        'auto_sleep_enabled': auto_sleep_enabled,
                         'auto_sleep_time': auto_sleep_time
                     }).eq('id', settings['id']).execute()
-                    st.success("Configurações Gerais salvas!"); st.cache_data.clear(); st.rerun()
+                    st.success("Configurações Gerais salvas! O bot pode precisar ser reiniciado para que todas as alterações tenham efeito."); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"Erro: {e}")
 
     with st.expander("🧠 Configurações de Memória Generativa"):
