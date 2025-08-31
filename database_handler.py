@@ -174,43 +174,30 @@ def get_and_clear_signals() -> list:
         logging.error(f"Erro ao buscar e limpar sinais de controle: {e}")
         return []
 
-# ==============================================================================
-#                      NOVAS FUNÇÕES PARA LEMBRETES
-# ==============================================================================
 def save_reminder(created_by, channel_name, trigger_type, trigger_value, content, target_user):
-    """Salva um novo lembrete no banco de dados."""
     if not DB_ENABLED: return False
     try:
         supabase_client.table('reminders').insert({
-            "created_by": created_by,
-            "channel_name": channel_name,
-            "trigger_type": trigger_type,
-            "trigger_value": trigger_value,
-            "content": content,
-            "target_user": target_user,
-            "is_active": True
+            "created_by": created_by, "channel_name": channel_name,
+            "trigger_type": trigger_type, "trigger_value": trigger_value,
+            "content": content, "target_user": target_user, "is_active": True
         }).execute()
         return True
     except Exception as e:
-        logging.error(f"Erro ao salvar lembrete: {e}")
-        return False
+        logging.error(f"Erro ao salvar lembrete: {e}"); return False
 
 def get_active_reminders(channel_name: str) -> list:
-    """Busca todos os lembretes ativos para um canal específico."""
     if not DB_ENABLED: return []
     try:
         response = supabase_client.table('reminders').select("*").eq("channel_name", channel_name).eq("is_active", True).execute()
         return response.data
     except Exception as e:
-        logging.error(f"Erro ao buscar lembretes: {e}")
-        return []
+        logging.error(f"Erro ao buscar lembretes: {e}"); return []
 
 def update_reminder_execution_time(reminder_id: int):
     """Atualiza o carimbo de data/hora da última execução de um lembrete."""
     if not DB_ENABLED: return
     try:
-        supabase_client.table('reminders').update({
-            "last_executed_at": datetime.now(pytz.utc).isoformat()
-        }).eq("id", reminder_id).execute()
+        supabase_client.table('reminders').update({"last_executed_at": datetime.now(pytz.utc).isoformat()}).eq("id", reminder_id).execute()
     except Exception as e:
         logging.error(f"Erro ao atualizar timestamp do lembrete {reminder_id}: {e}")
