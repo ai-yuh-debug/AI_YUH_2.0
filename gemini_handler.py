@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
+import json
 import google.generativeai as genai
 from ddgs import DDGS
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import database_handler
 import requests
 from bs4 import BeautifulSoup
+
+# Carrega a chave da API do Serper a partir das variáveis de ambiente
+SERPER_API_KEY = os.getenv('SERPER_API_KEY')
 
 GEMINI_ENABLED = False
 interaction_model = None
@@ -37,24 +41,71 @@ def load_models_from_settings(settings: dict):
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
-def web_search_ddgs(query: str, num_results: int = 5) -> str:
-    database_handler.add_live_log("IA PENSANDO", f"Executando busca DDGS por: '{query}'")
+def web_search_ddgs(query: str, num_results: int = 3) -> str:
+    """Tenta a busca usando DDGS. Retorna uma string de contexto ou uma string de erro."""
+    database_handler.add_live_log("IA PENSANDO", f"Buscando (DDGS): '{query}'")
     try:
-        news_results = DDGS().news(query, max_results=num_results)
-        if news_results:
-            database_handler.add_live_log("IA PENSANDO", f"Encontrados {len(news_results)} resultados de notícias.")
-            return "Contexto de notícias da busca na web:\n" + "\n".join(f"- Título: {res['title']}, Fonte: {res['source']}, Conteúdo: {res['body']}" for res in news_results)
+        with DDGS(timeout=10) as ddgs:
+            results = ddgs.text(query, max_results=num_results)
+            if not results:
+                return "ERRO: Nenhum resultado encontrado no DDGS."
         
-        database_handler.add_live_log("IA PENSANDO", "Nenhuma notícia encontrada. Tentando busca de texto padrão.")
-        text_results = DDGS().text(query, max_results=num_results)
-        if not text_results:
-            return "Nenhum resultado encontrado na web."
-            
-        database_handler.add_live_log("IA PENSANDO", f"Encontrados {len(text_results)} resultados de texto.")
-        return "Contexto da busca na web:\n" + "\n".join(f"- Título: {res['title']}, Conteúdo: {res['body']}" for res in text_results)
+        context = "Contexto da busca na web (DDGS):\n" + "\n".join(f"- Título: {res['title']}, Conteúdo: {res['body']}" for res in results)
+        database_handler.add_live_log("IA PENSANDO", f"Sucesso (DDGS): {len(results)} resultados.")
+        return context
 
     except Exception as e:
-        print(f"Erro na busca DDGS: {e}"); return "Erro ao tentar buscar na web."
+        print(f"Erro na busca DDGS: {e}")
+        database_handler.add_live_log("IA PENSANDO", f"Falha (DDGS): {e}")
+        return f"ERRO: A busca com DDGS falhou. Razão: {e}"
+
+def web_search_serper(query: str, num_results: int = 3) -> str:
+    """Tenta a busca usando a API do Serper.dev como fallback. Retorna contexto ou erro."""
+    if not SERPER_API_KEY:
+        return "ERRO: Chave da API do Serper.dev não configurada."
+        
+    database_handler.add_live_log("IA PENSANDO", f"Fallback para Serper.dev: '{query}'")
+    
+    url = "https://google.serper.dev/search"
+    payload = json.dumps({"q": query, "num": num_results})
+    headers = {
+        'X-API-KEY': SERPER_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, data=payload, timeout=10)
+        response.raise_for_status()
+        results = response.json()
+        
+        if 'organic' not in results or not results['organic']:
+            return "ERRO: Nenhum resultado encontrado no Serper.dev."
+
+        snippets = results['organic']
+        context = "Contexto da busca na web (Google via Serper):\n" + "\n".join(f"- Título: {res.get('title', 'N/A')}, Conteúdo: {res.get('snippet', 'N/A')}" for res in snippets)
+        database_handler.add_live_log("IA PENSANDO", f"Sucesso (Serper): {len(snippets)} resultados.")
+        return context
+
+    except requests.RequestException as e:
+        print(f"Erro na API do Serper: {e}")
+        database_handler.add_live_log("IA PENSANDO", f"Falha (Serper): {e}")
+        return f"ERRO: A busca com Serper falhou. Razão: {e}"
+
+def perform_web_search(query: str) -> str:
+    """Orquestra a busca, tentando DDGS primeiro e Serper.dev como fallback."""
+    # Tentativa 1: DDGS
+    ddgs_result = web_search_ddgs(query)
+    if not ddgs_result.startswith("ERRO:"):
+        return ddgs_result
+    
+    # Tentativa 2: Serper.dev (se DDGS falhou)
+    serper_result = web_search_serper(query)
+    if not serper_result.startswith("ERRO:"):
+        return serper_result
+
+    # Se ambos falharem
+    return "Falha crítica: Ambos os serviços de busca (DDGS e Serper) estão indisponíveis ou falharam."
+
 
 def read_url_content(url: str) -> str:
     database_handler.add_live_log("IA PENSANDO", f"Tentando ler o conteúdo da URL: {url}")
@@ -62,19 +113,10 @@ def read_url_content(url: str) -> str:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-
         soup = BeautifulSoup(response.content, 'html.parser')
-        
-        for script_or_style in soup(["script", "style"]):
-            script_or_style.decompose()
-
-        text = soup.get_text()
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        text = '\n'.join(chunk for chunk in chunks if chunk)
-
+        for script_or_style in soup(["script", "style"]): script_or_style.decompose()
+        text = '\n'.join(chunk for chunk in (phrase.strip() for line in (line.strip() for line in soup.get_text().splitlines()) for phrase in line.split("  ")) if chunk)
         return f"Conteúdo da página '{url}':\n\n{text[:4000]}"
-
     except requests.RequestException as e:
         print(f"Erro ao acessar a URL {url}: {e}")
         return f"Erro: Não foi possível acessar a URL. O site pode estar bloqueado ou fora do ar. Erro: {e}"
@@ -127,7 +169,7 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
         
         if initial_text.startswith("[SEARCH]") and initial_text.endswith("[/SEARCH]"):
             query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
-            context = web_search_ddgs(query)
+            context = perform_web_search(query)
             database_handler.add_live_log("IA PENSANDO", f"Contexto da BUSCA retornado para a IA.")
             prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final.", context]
             response = chat.send_message(prompt_parts, safety_settings=safety_settings)
