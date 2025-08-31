@@ -27,7 +27,7 @@ short_term_memory = {}
 global_chat_buffer = []
 GLOBAL_BUFFER_MAX_MESSAGES = 40
 GLOBAL_BUFFER_MAX_MINUTES = 15
-MEMORY_EXPIRATION_MINUTES = 10 # Aumentado para 10 minutos
+MEMORY_EXPIRATION_MINUTES = 10
 MAX_HISTORY_LENGTH = 10
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 BOT_STATE = 'ASLEEP'
@@ -106,7 +106,7 @@ def consolidate_weekly_memories(force=False):
     if not daily_memories:
         database_handler.add_live_log("STATUS", "Nenhuma memória diária para sumarizar.")
         return
-    memories_to_summarize = daily_memories[:7] if not force else daily_memories
+    memories_to_summarize = daily_memories if force else daily_memories[:7]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias diárias para memória semanal...")
     full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
     weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}", "semanal")
@@ -127,7 +127,7 @@ def consolidate_monthly_memories(force=False):
     if not weekly_memories:
         database_handler.add_live_log("STATUS", "Nenhuma memória semanal para sumarizar.")
         return
-    memories_to_summarize = weekly_memories[:4] if not force else weekly_memories
+    memories_to_summarize = weekly_memories if force else weekly_memories[:4]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias semanais...")
     full_text = "\n\n".join([f"Resumo da semana de {mem['metadata']['start_date']} a {mem['metadata']['end_date']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('start_date')])
     monthly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do mês a seguir:\n{full_text}", "mensal")
@@ -147,7 +147,7 @@ def consolidate_yearly_memories(force=False):
     if not monthly_memories:
         database_handler.add_live_log("STATUS", "Nenhuma memória mensal para sumarizar.")
         return
-    memories_to_summarize = monthly_memories[:12] if not force else monthly_memories
+    memories_to_summarize = monthly_memories if force else monthly_memories[:12]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias mensais...")
     full_text = "\n\n".join([f"Resumo de {mem['metadata']['month']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('month')])
     year_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do ano a seguir:\n{full_text}", "anual")
@@ -167,7 +167,7 @@ def consolidate_secular_memories(force=False):
     if not yearly_memories:
         database_handler.add_live_log("STATUS", "Nenhuma memória anual para sumarizar.")
         return
-    memories_to_summarize = yearly_memories[:100] if not force else yearly_memories
+    memories_to_summarize = yearly_memories if force else yearly_memories[:100]
     database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Sumarizando {len(memories_to_summarize)} memórias anuais...")
     full_text = "\n\n".join([f"Resumo do ano {mem['metadata']['year']}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('year')])
     century_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes do século a seguir:\n{full_text}", "secular")
@@ -247,10 +247,8 @@ def cleanup_inactive_memory():
     if BOT_STATE == 'ASLEEP': return
     now = datetime.now()
     inactive_users = [user for user, data in list(short_term_memory.items()) if now - data['last_interaction'] > timedelta(minutes=MEMORY_EXPIRATION_MINUTES)]
-    
     for user in inactive_users:
         user_permission = database_handler.get_user_permission(user)
-        
         if user_permission == 'master':
             database_handler.add_live_log("MEMÓRIA PESSOAL", f"Usuário master '{user}' inativo. Sumarizando e salvando memória.")
             user_memory_data = short_term_memory[user]
@@ -258,7 +256,6 @@ def cleanup_inactive_memory():
             database_handler.save_long_term_memory(user, summary)
         else:
             database_handler.add_live_log("MEMÓRIA PESSOAL", f"Usuário normal '{user}' inativo. Limpando memória de curto prazo.")
-        
         del short_term_memory[user]
 
 def process_message(sock, raw_message):
@@ -324,8 +321,7 @@ def process_message(sock, raw_message):
                     is_activated = False
 
             if is_activated and question:
-                long_term_memories = database_handler.search_long_term_memory(user_info) # Busca para todos
-                
+                long_term_memories = database_handler.search_long_term_memory(user_info)
                 current_lorebook = database_handler.get_current_lorebook()
                 hierarchical_memories = database_handler.search_hierarchical_memory()
                 user_memory = short_term_memory.get(user_info, {"history": []})
@@ -408,7 +404,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v4.0.4-final-fix) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v4.0.5-stable) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
