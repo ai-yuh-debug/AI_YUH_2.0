@@ -142,17 +142,23 @@ def get_live_logs(limit: int = 150) -> list:
         print(f"ERRO AO BUSCAR LOGS DO DB: {e}"); return []
 
 def delete_old_logs():
+    """Deleta logs da tabela 'live_logs' com mais de 7 dias."""
     if not DB_ENABLED: return
     try:
-        time_threshold = (datetime.now(pytz.utc) - timedelta(hours=24)).isoformat()
+        # ==============================================================================
+        #                      ALTERAÇÃO PRINCIPAL AQUI
+        # ==============================================================================
+        # Mudado de timedelta(hours=24) para timedelta(days=7)
+        time_threshold = (datetime.now(pytz.utc) - timedelta(days=7)).isoformat()
+        # ==============================================================================
+        
         supabase_client.table('live_logs').delete().lt('created_at', time_threshold).execute()
-        logging.info("Limpeza de logs antigos da tabela 'live_logs' executada.")
-        add_live_log("STATUS", "Limpeza de logs antigos executada.")
+        logging.info("Limpeza de logs com mais de 7 dias executada.")
+        add_live_log("STATUS", "Limpeza de logs antigos (7 dias) executada.")
     except Exception as e:
         logging.error(f"Erro ao deletar logs antigos: {e}")
 
 def send_control_signal(signal: str):
-    """Envia um comando para a tabela de sinais para o bot executar."""
     if not DB_ENABLED: return False
     try:
         supabase_client.table('control_signals').insert({"signal": signal}).execute()
@@ -163,7 +169,6 @@ def send_control_signal(signal: str):
         return False
 
 def get_and_clear_signals() -> list:
-    """Busca todos os sinais não processados e os marca como processados."""
     if not DB_ENABLED: return []
     try:
         response = supabase_client.table('control_signals').select("id, signal").eq("processed", False).execute()
