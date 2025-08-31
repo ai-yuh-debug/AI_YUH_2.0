@@ -31,33 +31,9 @@ def load_models_from_settings(settings: dict):
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
         
-        # ==============================================================================
-        #              DEFINIÇÃO DA FERRAMENTA COM A SINTAXE CORRETA (v0.8.5)
-        # ==============================================================================
-        tools = [
-            genai.protos.Tool(
-                function_declarations=[
-                    genai.protos.FunctionDeclaration(
-                        name='create_reminder',
-                        description="Cria um lembrete para enviar uma mensagem no chat em um momento futuro. Use esta ferramenta sempre que um usuário 'master' pedir para ser lembrado de algo.",
-                        parameters=genai.protos.Schema(
-                            type=genai.protos.Type.OBJECT,
-                            properties={
-                                'content': genai.protos.Schema(type=genai.protos.Type.STRING, description="O texto exato da mensagem de lembrete a ser enviada."),
-                                'target_user': genai.protos.Schema(type=genai.protos.Type.STRING, description="O nome do usuário para quem o lembrete se destina (ex: 'Spiq'). Se não for especificado, o lembrete é para o usuário que pediu."),
-                                'trigger_type': genai.protos.Schema(type=genai.protos.Type.STRING, description="O tipo de gatilho para o lembrete. Valores possíveis: 'live_on', 'interval'."),
-                                'trigger_value': genai.protos.Schema(type=genai.protos.Type.STRING, description="O valor para o gatilho 'interval'. Formato: um número seguido por 'm' para minutos ou 'h' para horas (ex: '30m', '5m', '1h'). Obrigatório se trigger_type for 'interval'.")
-                            },
-                            required=['content', 'trigger_type']
-                        )
-                    )
-                ]
-            )
-        ]
-        
-        interaction_model = genai.GenerativeModel(model_name=interaction_model_name, tools=tools)
+        interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
         summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
-        print(f"Modelo de interação '{interaction_model_name}' carregado com ferramentas.")
+        print(f"Modelo de interação '{interaction_model_name}' carregado.")
         print(f"Modelo arquivista '{archivist_model_name}' carregado.")
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
@@ -100,9 +76,12 @@ def read_url_content(url: str) -> str:
 
         return f"Conteúdo da página '{url}':\n\n{text[:4000]}"
 
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"Erro ao acessar a URL {url}: {e}")
         return f"Erro: Não foi possível acessar a URL. O site pode estar bloqueado ou fora do ar. Erro: {e}"
+    except Exception as e:
+        print(f"Erro ao processar a URL {url}: {e}")
+        return "Erro: Não foi possível processar o conteúdo da página."
 
 def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, user_info: str, user_permission: str, current_time: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
@@ -117,11 +96,11 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     )
     
     search_instructions = (
-        "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS:**\n"
-        "1. **Para buscas gerais:** Se precisar de informações externas, responda APENAS com `[SEARCH]termo[/SEARCH]`.\n"
-        "2. **Para ler uma URL:** Se o usuário fornecer uma URL, responda APENAS com `[READ_URL]url[/READ_URL]`.\n"
-        "3. **Para criar lembretes:** Se um usuário com permissão 'master' pedir para criar um lembrete, use a ferramenta `create_reminder`. Se um usuário 'normal' pedir, negue educadamente.\n"
-        "**NÃO tente responder de outra forma.**"
+        "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS (PLACEHOLDERS DE TEXTO):**\n"
+        "1. **Para buscas:** Se precisar de informações externas, responda APENAS com `[SEARCH]termo de busca[/SEARCH]`.\n"
+        "2. **Para ler URLs:** Se o usuário fornecer uma URL, responda APENAS com `[READ_URL]url[/READ_URL]`.\n"
+        "3. **Para criar lembretes:** Se um usuário 'master' pedir para criar um lembrete, interprete o pedido e responda APENAS com o placeholder `[CREATE_REMINDER]content; trigger_type; trigger_value; target_user[/CREATE_REMINDER]`. Separe os parâmetros com ';'. Gatilhos válidos: 'live_on', 'interval'. Valores de intervalo: '5m', '1h', etc. Se o usuário alvo não for especificado, use o nome de quem pediu.\n"
+        "**NÃO tente responder de outra forma. Sua resposta DEVE ser apenas o placeholder.**"
     )
     full_history.append({'role': 'user', 'parts': [system_prompt + search_instructions]})
     full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS."]})
@@ -145,27 +124,6 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     try:
         database_handler.add_live_log("IA PENSANDO", f"Pergunta para IA de '{user_info}': '{question}'")
         response = chat.send_message(question, safety_settings=safety_settings)
-        
-        # Loop para lidar com chamadas de ferramentas
-        while response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
-            function_call = response.candidates[0].content.parts[0].function_call
-            
-            if function_call.name == "create_reminder":
-                args = {k: v for k, v in function_call.args.items()}
-                database_handler.add_live_log("IA PENSANDO", f"IA solicitou a criação de um lembrete com args: {args}")
-                success = database_handler.save_reminder(
-                    created_by=user_info, channel_name=os.getenv('TTV_CHANNEL'),
-                    trigger_type=args.get('trigger_type'), trigger_value=args.get('trigger_value'),
-                    content=args.get('content'), target_user=args.get('target_user')
-                )
-                response = chat.send_message(
-                    genai.Part(function_response=genai.protos.FunctionResponse(
-                        name="create_reminder", response={"success": success, "content": args.get('content')}
-                    ))
-                )
-            else:
-                break
-
         initial_text = response.text.strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{initial_text}'")
         
@@ -174,15 +132,40 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
             context = web_search_ddgs(query)
             prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final.", context]
             response = chat.send_message(prompt_parts, safety_settings=safety_settings)
-
+            final_text = response.text
         elif initial_text.startswith("[READ_URL]") and initial_text.endswith("[/READ_URL]"):
             url = initial_text.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
             context = read_url_content(url)
             prompt_parts = ["Você recebeu o conteúdo da página web. Com base neste texto, formule sua resposta final.", context]
             response = chat.send_message(prompt_parts, safety_settings=safety_settings)
+            final_text = response.text
+        elif initial_text.startswith("[CREATE_REMINDER]") and initial_text.endswith("[/CREATE_REMINDER]"):
+            params_str = initial_text.split("[CREATE_REMINDER]")[1].split("[/CREATE_REMINDER]")[0]
+            params = [p.strip() for p in params_str.split(';')]
             
-        if not response.parts: return "Minha resposta foi bloqueada por segurança."
-        final_text = response.text.replace('*', '').replace('`', '').strip()
+            try:
+                content = params[0]
+                trigger_type = params[1]
+                trigger_value = params[2] if len(params) > 2 else None
+                target_user = params[3] if len(params) > 3 else user_info
+                
+                database_handler.add_live_log("IA PENSANDO", f"IA extraiu lembrete: content='{content}', trigger='{trigger_type}:{trigger_value}', target='{target_user}'")
+                success = database_handler.save_reminder(
+                    created_by=user_info, channel_name=os.getenv('TTV_CHANNEL'),
+                    trigger_type=trigger_type, trigger_value=trigger_value,
+                    content=content, target_user=target_user
+                )
+                if success:
+                    final_text = f"Entendido! Criei um lembrete para '{content}' para você."
+                else:
+                    final_text = "Não consegui criar o lembrete, ocorreu um erro ao salvar."
+            except IndexError:
+                final_text = "Não consegui entender todos os parâmetros para criar o lembrete. Por favor, tente ser mais específico sobre o gatilho (ex: 'a cada 30 minutos' ou 'quando a live começar')."
+        else:
+            final_text = initial_text
+            
+        if not final_text: return "Minha resposta foi bloqueada por segurança."
+        final_text = final_text.replace('*', '').replace('`', '').strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta final para o usuário: '{final_text}'")
         return final_text
         

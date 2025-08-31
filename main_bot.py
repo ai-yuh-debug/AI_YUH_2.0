@@ -115,7 +115,7 @@ def check_reminders():
                 if last_executed_str is None:
                     should_execute = True
                 else:
-                    last_executed_dt = datetime.fromisoformat(last_executed_str)
+                    last_executed_dt = datetime.fromisoformat(last_executed_str.replace('Z', '+00:00'))
                     if now_utc >= last_executed_dt + delta:
                         should_execute = True
             except (IndexError, ValueError):
@@ -481,7 +481,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v4.1.1-final) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v4.1.2-stable) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
