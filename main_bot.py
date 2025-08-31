@@ -246,6 +246,7 @@ def consolidate_secular_memories(force=False):
 
 def consolidate_daily_memories(force=False):
     if BOT_STATE == 'ASLEEP' and not force: return
+    
     log_prefix = "SUMARIZAÇÃO FORÇADA" if force else "SUMARIZAÇÃO GLOBAL"
     database_handler.add_live_log(log_prefix, "Verificando memórias 'transfer' para consolidação diária.")
     
@@ -271,7 +272,7 @@ def consolidate_daily_memories(force=False):
     metadata = {"date": metadata_date, "forced": force}
     
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
+    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória diária consolidada.")
 
@@ -480,7 +481,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v4.1.0-reminders) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v4.1.1-final) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
