@@ -1,5 +1,6 @@
 # Versão congelada para compatibilidade máxima (Python < 3.9)
 # Versão final com todas as dependências, incluindo web scraping.
+# Linha para comentar
 
 python-dotenv
 schedule==1.2.2
