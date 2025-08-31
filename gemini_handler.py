@@ -31,6 +31,9 @@ def load_models_from_settings(settings: dict):
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
         
+        # ==============================================================================
+        #              DEFINIÇÃO DA FERRAMENTA COM A SINTAXE CORRETA (v0.8.5)
+        # ==============================================================================
         tools = [
             genai.protos.Tool(
                 function_declarations=[
@@ -41,9 +44,9 @@ def load_models_from_settings(settings: dict):
                             type=genai.protos.Type.OBJECT,
                             properties={
                                 'content': genai.protos.Schema(type=genai.protos.Type.STRING, description="O texto exato da mensagem de lembrete a ser enviada."),
-                                'target_user': genai.protos.Schema(type=genai.protos.Type.STRING, description="O nome do usuário para quem o lembrete se destina (ex: 'Spiq')."),
-                                'trigger_type': genai.protos.Schema(type=genai.protos.Type.STRING, description="O tipo de gatilho. Valores possíveis: 'live_on', 'interval'."),
-                                'trigger_value': genai.protos.Schema(type=genai.protos.Type.STRING, description="O valor para o gatilho 'interval'. Formato: um número seguido por 'm' para minutos ou 'h' para horas (ex: '30m', '1h').")
+                                'target_user': genai.protos.Schema(type=genai.protos.Type.STRING, description="O nome do usuário para quem o lembrete se destina (ex: 'Spiq'). Se não for especificado, o lembrete é para o usuário que pediu."),
+                                'trigger_type': genai.protos.Schema(type=genai.protos.Type.STRING, description="O tipo de gatilho para o lembrete. Valores possíveis: 'live_on', 'interval'."),
+                                'trigger_value': genai.protos.Schema(type=genai.protos.Type.STRING, description="O valor para o gatilho 'interval'. Formato: um número seguido por 'm' para minutos ou 'h' para horas (ex: '30m', '5m', '1h'). Obrigatório se trigger_type for 'interval'.")
                             },
                             required=['content', 'trigger_type']
                         )
@@ -97,12 +100,9 @@ def read_url_content(url: str) -> str:
 
         return f"Conteúdo da página '{url}':\n\n{text[:4000]}"
 
-    except requests.RequestException as e:
+    except Exception as e:
         print(f"Erro ao acessar a URL {url}: {e}")
         return f"Erro: Não foi possível acessar a URL. O site pode estar bloqueado ou fora do ar. Erro: {e}"
-    except Exception as e:
-        print(f"Erro ao processar a URL {url}: {e}")
-        return "Erro: Não foi possível processar o conteúdo da página."
 
 def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, user_info: str, user_permission: str, current_time: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
