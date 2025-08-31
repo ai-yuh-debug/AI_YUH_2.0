@@ -142,9 +142,16 @@ def get_live_logs(limit: int = 150) -> list:
         print(f"ERRO AO BUSCAR LOGS DO DB: {e}"); return []
 
 def delete_old_logs():
+    """Deleta logs da tabela 'live_logs' com mais de 7 dias."""
     if not DB_ENABLED: return
     try:
+        # ==============================================================================
+        #                      ALTERAÇÃO PRINCIPAL AQUI
+        # ==============================================================================
+        # Mudado de timedelta(hours=24) para timedelta(days=7)
         time_threshold = (datetime.now(pytz.utc) - timedelta(days=7)).isoformat()
+        # ==============================================================================
+        
         supabase_client.table('live_logs').delete().lt('created_at', time_threshold).execute()
         logging.info("Limpeza de logs com mais de 7 dias executada.")
         add_live_log("STATUS", "Limpeza de logs antigos (7 dias) executada.")
@@ -166,38 +173,12 @@ def get_and_clear_signals() -> list:
     try:
         response = supabase_client.table('control_signals').select("id, signal").eq("processed", False).execute()
         signals = response.data
+        
         if signals:
             signal_ids = [s['id'] for s in signals]
             supabase_client.table('control_signals').update({"processed": True}).in_("id", signal_ids).execute()
+            
         return signals
     except Exception as e:
         logging.error(f"Erro ao buscar e limpar sinais de controle: {e}")
         return []
-
-def save_reminder(created_by, channel_name, trigger_type, trigger_value, content, target_user):
-    if not DB_ENABLED: return False
-    try:
-        supabase_client.table('reminders').insert({
-            "created_by": created_by, "channel_name": channel_name,
-            "trigger_type": trigger_type, "trigger_value": trigger_value,
-            "content": content, "target_user": target_user, "is_active": True
-        }).execute()
-        return True
-    except Exception as e:
-        logging.error(f"Erro ao salvar lembrete: {e}"); return False
-
-def get_active_reminders(channel_name: str) -> list:
-    if not DB_ENABLED: return []
-    try:
-        response = supabase_client.table('reminders').select("*").eq("channel_name", channel_name).eq("is_active", True).execute()
-        return response.data
-    except Exception as e:
-        logging.error(f"Erro ao buscar lembretes: {e}"); return []
-
-def update_reminder_execution_time(reminder_id: int):
-    """Atualiza o carimbo de data/hora da última execução de um lembrete."""
-    if not DB_ENABLED: return
-    try:
-        supabase_client.table('reminders').update({"last_executed_at": datetime.now(pytz.utc).isoformat()}).eq("id", reminder_id).execute()
-    except Exception as e:
-        logging.error(f"Erro ao atualizar timestamp do lembrete {reminder_id}: {e}")

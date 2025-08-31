@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # 2. Iniciar o painel Streamlit na thread principal
     logging.info("Iniciando o painel de controle Streamlit...")
     
-    port = int(os.environ.get("PORT", 8501))
+    port = os.environ.get("PORT", 8501)
     
     streamlit_command = f"streamlit run panel.py --server.port {port} --server.enableCORS false --server.enableXsrfProtection false"
     
