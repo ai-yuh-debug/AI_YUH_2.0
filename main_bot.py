@@ -31,6 +31,7 @@ MEMORY_EXPIRATION_MINUTES = 10
 MAX_HISTORY_LENGTH = 10
 TIMEZONE = pytz.timezone('America/Sao_Paulo')
 BOT_STATE = 'ASLEEP'
+sock_global = None # Socket global para ser usado por funções agendadas
 
 def go_to_sleep():
     global BOT_STATE
@@ -87,10 +88,55 @@ def check_control_signals():
         elif signal == 'FORCE_SECULAR_SUMMARY': force_consolidate_secular()
         else: database_handler.add_live_log("ERRO", f"Sinal de controle desconhecido: '{signal}'")
 
+def check_reminders():
+    if BOT_STATE != 'AWAKE' or sock_global is None: return
+    
+    reminders = database_handler.get_active_reminders(TTV_CHANNEL)
+    now_utc = datetime.now(pytz.utc)
+
+    for r in reminders:
+        should_execute = False
+        trigger_type = r.get('trigger_type')
+        last_executed_str = r.get('last_executed_at')
+        
+        if trigger_type == 'live_on' and last_executed_str is None:
+            should_execute = True
+        
+        elif trigger_type == 'interval':
+            trigger_value_str = r.get('trigger_value', '0m')
+            try:
+                value = int(re.findall(r'\d+', trigger_value_str)[0])
+                unit = re.findall(r'[a-zA-Z]+', trigger_value_str)[0].lower()
+                
+                if unit == 'm': delta = timedelta(minutes=value)
+                elif unit == 'h': delta = timedelta(hours=value)
+                else: continue
+                
+                if last_executed_str is None:
+                    should_execute = True
+                else:
+                    last_executed_dt = datetime.fromisoformat(last_executed_str)
+                    if now_utc >= last_executed_dt + delta:
+                        should_execute = True
+            except (IndexError, ValueError):
+                continue
+        
+        if should_execute:
+            content = r.get('content')
+            target = r.get('target_user')
+            message = f"@{target} Lembrete: {content}" if target else f"Lembrete para o chat: {content}"
+            
+            send_chat_message(sock_global, message)
+            database_handler.update_reminder_execution_time(r['id'])
+            if trigger_type == 'live_on':
+                database_handler.supabase_client.table('reminders').update({"is_active": False}).eq("id", r['id']).execute()
+
 def run_scheduler():
     logging.info("Agendador de memória e tarefas iniciado.")
     database_handler.add_live_log("STATUS", "Agendador iniciado.")
+    
     schedule.every().minute.do(check_control_signals)
+    schedule.every().minute.do(check_reminders)
     schedule.every(2).minutes.do(send_heartbeat)
     schedule.every().day.at("00:15", str(TIMEZONE)).do(consolidate_daily_memories)
     schedule.every().monday.at("01:00", str(TIMEZONE)).do(consolidate_weekly_memories)
@@ -98,6 +144,7 @@ def run_scheduler():
     schedule.every().day.at("02:00", str(TIMEZONE)).do(consolidate_yearly_memories)
     schedule.every().day.at("02:30", str(TIMEZONE)).do(consolidate_secular_memories)
     schedule.every().day.at("03:00", str(TIMEZONE)).do(database_handler.delete_old_logs)
+    
     auto_sleep_enabled = BOT_SETTINGS.get('auto_sleep_enabled', False)
     auto_sleep_time = BOT_SETTINGS.get('auto_sleep_time')
     if auto_sleep_enabled and auto_sleep_time and isinstance(auto_sleep_time, str) and len(auto_sleep_time) == 5:
@@ -106,6 +153,7 @@ def run_scheduler():
             database_handler.add_live_log("STATUS", f"Auto-Sleep agendado para as {auto_sleep_time} (UTC-3).")
         except Exception as e:
             database_handler.add_live_log("ERRO", f"Horário de Auto-Sleep inválido: {auto_sleep_time}. Erro: {e}")
+
     while True:
         schedule.run_pending()
         time.sleep(1)
@@ -121,16 +169,16 @@ def consolidate_weekly_memories(force=False):
         database_handler.add_live_log("STATUS", "Nenhuma memória diária para sumarizar.")
         return
     memories_to_summarize = daily_memories if force else daily_memories[:7]
-    database_handler.add_live_log(log_prefix, f"Sumarizando {len(memories_to_summarize)} memórias diárias para memória semanal...")
+    database_handler.add_live_log(log_prefix, f"Sumarizando {len(memories_to_summarize)} memórias diárias...")
     full_text = "\n\n".join([f"Eventos de {datetime.fromisoformat(mem['metadata']['date']).strftime('%A, %d/%m/%Y')}:\n{mem['summary']}" for mem in memories_to_summarize if mem.get('metadata') and mem['metadata'].get('date')])
-    weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos mais importantes da semana a seguir:\n{full_text}", "semanal")
+    weekly_summary = gemini_handler.summarize_global_chat(f"Resuma os eventos da semana:\n{full_text}", "semanal")
     start_date = memories_to_summarize[0]['metadata']['date']
     end_date = memories_to_summarize[-1]['metadata']['date']
     metadata = {"start_date": start_date, "end_date": end_date, "forced": force}
     database_handler.save_hierarchical_memory("weekly", weekly_summary, metadata)
     ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
-    database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória semanal consolidada e memórias diárias limpas.")
+    database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória semanal consolidada.")
 
 def consolidate_monthly_memories(force=False):
     log_prefix = "SUMARIZAÇÃO FORÇADA" if force else "SUMARIZAÇÃO GLOBAL"
@@ -198,7 +246,6 @@ def consolidate_secular_memories(force=False):
 
 def consolidate_daily_memories(force=False):
     if BOT_STATE == 'ASLEEP' and not force: return
-    
     log_prefix = "SUMARIZAÇÃO FORÇADA" if force else "SUMARIZAÇÃO GLOBAL"
     database_handler.add_live_log(log_prefix, "Verificando memórias 'transfer' para consolidação diária.")
     
@@ -224,7 +271,7 @@ def consolidate_daily_memories(force=False):
     metadata = {"date": metadata_date, "forced": force}
     
     database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
-    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
+    ids_to_delete = [mem['id'] for mem in memories_to_summarize]
     database_handler.delete_memories_by_ids(ids_to_delete)
     database_handler.add_live_log("MEMÓRIA GLOBAL", "Memória diária consolidada.")
 
@@ -256,7 +303,14 @@ def summarize_and_clear_global_buffer():
     transcript = "\n".join(f"[{msg['timestamp'].strftime('%H:%M')}] {msg['user']}: {msg['content']}" for msg in global_chat_buffer)
     summary = gemini_handler.summarize_global_chat(transcript, "transferência")
     if "erro" not in summary.lower() and len(summary) > 10:
-        database_handler.save_hierarchical_memory("transfer", summary)
+        start_time = global_chat_buffer[0]['timestamp']
+        end_time = global_chat_buffer[-1]['timestamp']
+        metadata = {
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "message_count": len(global_chat_buffer)
+        }
+        database_handler.save_hierarchical_memory("transfer", summary, metadata)
     else:
         database_handler.add_live_log("ERRO", f"Sumarização falhou ou retornou conteúdo inválido: '{summary}'")
     global_chat_buffer = []
@@ -294,11 +348,13 @@ def process_message(sock, raw_message):
                 BOT_STATE = 'AWAKE'
                 database_handler.add_live_log("STATUS", "Bot ATIVADO pelo anúncio de live.")
                 send_chat_message(sock, "Alerta de live detectado. AI_Yuh ativada e pronta para interagir!")
+                check_reminders()
                 return
             if msg_lower == '!awake' and user_permission == 'master':
                 BOT_STATE = 'AWAKE'
                 database_handler.add_live_log("STATUS", f"Bot ATIVADO manualmente por {user_info}.")
                 send_chat_message(sock, f"Entendido, {user_info}. Ativando sistemas. AI_Yuh está online.")
+                check_reminders()
                 return
             return
 
@@ -357,7 +413,7 @@ def process_message(sock, raw_message):
                 database_handler.update_bot_debug_status(debug_string)
                 
                 final_response = gemini_handler.generate_interactive_response(
-                    question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, user_info, current_time=current_time_str
+                    question, user_memory['history'], BOT_SETTINGS, current_lorebook, long_term_memories, hierarchical_memories, user_info, user_permission, current_time=current_time_str
                 )
                 
                 send_chat_message(sock, f"@{user_info} {final_response}")
@@ -400,7 +456,7 @@ def listen_for_messages(sock):
             time.sleep(15)
 
 def main():
-    global BOT_SETTINGS, LOREBOOK, BOT_STATE
+    global BOT_SETTINGS, LOREBOOK, BOT_STATE, sock_global
     BOT_SETTINGS, LOREBOOK = database_handler.load_initial_data()
     if not BOT_SETTINGS:
         logging.critical("Não foi possível carregar as configs do bot."); return
@@ -412,6 +468,7 @@ def main():
     scheduler_thread.start()
     
     sock = socket.socket()
+    sock_global = sock
     sock.settimeout(60.0)
     try:
         database_handler.add_live_log("STATUS", "Conectando ao IRC da Twitch...")
@@ -423,7 +480,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v4.0.5-final) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v4.1.0-reminders) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")

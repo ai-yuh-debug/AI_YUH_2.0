@@ -30,9 +30,31 @@ def load_models_from_settings(settings: dict):
     try:
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
-        interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
+        
+        tools = [
+            genai.protos.Tool(
+                function_declarations=[
+                    genai.protos.FunctionDeclaration(
+                        name='create_reminder',
+                        description="Cria um lembrete para enviar uma mensagem no chat em um momento futuro. Use esta ferramenta sempre que um usuário 'master' pedir para ser lembrado de algo.",
+                        parameters=genai.protos.Schema(
+                            type=genai.protos.Type.OBJECT,
+                            properties={
+                                'content': genai.protos.Schema(type=genai.protos.Type.STRING, description="O texto exato da mensagem de lembrete a ser enviada."),
+                                'target_user': genai.protos.Schema(type=genai.protos.Type.STRING, description="O nome do usuário para quem o lembrete se destina (ex: 'Spiq')."),
+                                'trigger_type': genai.protos.Schema(type=genai.protos.Type.STRING, description="O tipo de gatilho. Valores possíveis: 'live_on', 'interval'."),
+                                'trigger_value': genai.protos.Schema(type=genai.protos.Type.STRING, description="O valor para o gatilho 'interval'. Formato: um número seguido por 'm' para minutos ou 'h' para horas (ex: '30m', '1h').")
+                            },
+                            required=['content', 'trigger_type']
+                        )
+                    )
+                ]
+            )
+        ]
+        
+        interaction_model = genai.GenerativeModel(model_name=interaction_model_name, tools=tools)
         summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
-        print(f"Modelo de interação '{interaction_model_name}' carregado.")
+        print(f"Modelo de interação '{interaction_model_name}' carregado com ferramentas.")
         print(f"Modelo arquivista '{archivist_model_name}' carregado.")
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
@@ -82,26 +104,27 @@ def read_url_content(url: str) -> str:
         print(f"Erro ao processar a URL {url}: {e}")
         return "Erro: Não foi possível processar o conteúdo da página."
 
-def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, user_info: str, current_time: str) -> str:
+def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, user_info: str, user_permission: str, current_time: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
     
     full_history = []
     personality_prompt = settings.get('personality_prompt', '')
     
     system_prompt = (
-        f"**FATO DO SISTEMA (não revele ao usuário a menos que perguntado):** A data e hora exatas agora são {current_time}. O usuário que está falando com você se chama '{user_info}'.\n\n"
-        f"**REGRA DE NOMES DE USUÁRIO:** Nomes de usuário não diferenciam maiúsculas de minúsculas. 'Spiq' é a mesma pessoa que 'spiq'. Sempre trate-os como idênticos.\n\n"
+        f"**FATO DO SISTEMA:** A data e hora exatas agora são {current_time}. O usuário que está falando com você é '{user_info}', que tem o nível de permissão '{user_permission}'.\n\n"
+        f"**REGRA DE NOMES DE USUÁRIO:** Nomes de usuário não diferenciam maiúsculas de minúsculas. 'Spiq' é a mesma pessoa que 'spiq'.\n\n"
         f"{personality_prompt}"
     )
     
     search_instructions = (
         "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS:**\n"
-        "1. **Para buscas gerais:** Se a pergunta do usuário exigir conhecimento externo ou atual (notícias, eventos, fatos, cotações, etc.) que não esteja na sua memória, sua PRIMEIRA E ÚNICA resposta DEVE ser `[SEARCH]termo de busca otimizado[/SEARCH]`.\n"
-        "2. **Para ler uma página específica:** Se o usuário fornecer uma URL e pedir explicitamente para você ler ou resumir seu conteúdo, sua PRIMEIRA E ÚNICA resposta DEVE ser `[READ_URL]https://url.completa/aqui[/READ_URL]`.\n"
-        "**NÃO tente responder de outra forma. NÃO se desculpe. NÃO adicione texto extra. A falha em seguir estas regras resultará em um erro.**"
+        "1. **Para buscas gerais:** Se precisar de informações externas, responda APENAS com `[SEARCH]termo[/SEARCH]`.\n"
+        "2. **Para ler uma URL:** Se o usuário fornecer uma URL, responda APENAS com `[READ_URL]url[/READ_URL]`.\n"
+        "3. **Para criar lembretes:** Se um usuário com permissão 'master' pedir para criar um lembrete, use a ferramenta `create_reminder`. Se um usuário 'normal' pedir, negue educadamente.\n"
+        "**NÃO tente responder de outra forma.**"
     )
     full_history.append({'role': 'user', 'parts': [system_prompt + search_instructions]})
-    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS. Nomes de usuário são case-insensitive. Usarei `[SEARCH]` ou `[READ_URL]` quando necessário e estou ciente da hora atual."]})
+    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS."]})
     
     if lorebook:
         lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
@@ -122,20 +145,39 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     try:
         database_handler.add_live_log("IA PENSANDO", f"Pergunta para IA de '{user_info}': '{question}'")
         response = chat.send_message(question, safety_settings=safety_settings)
+        
+        # Loop para lidar com chamadas de ferramentas
+        while response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
+            function_call = response.candidates[0].content.parts[0].function_call
+            
+            if function_call.name == "create_reminder":
+                args = {k: v for k, v in function_call.args.items()}
+                database_handler.add_live_log("IA PENSANDO", f"IA solicitou a criação de um lembrete com args: {args}")
+                success = database_handler.save_reminder(
+                    created_by=user_info, channel_name=os.getenv('TTV_CHANNEL'),
+                    trigger_type=args.get('trigger_type'), trigger_value=args.get('trigger_value'),
+                    content=args.get('content'), target_user=args.get('target_user')
+                )
+                response = chat.send_message(
+                    genai.Part(function_response=genai.protos.FunctionResponse(
+                        name="create_reminder", response={"success": success, "content": args.get('content')}
+                    ))
+                )
+            else:
+                break
+
         initial_text = response.text.strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{initial_text}'")
         
         if initial_text.startswith("[SEARCH]") and initial_text.endswith("[/SEARCH]"):
             query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
             context = web_search_ddgs(query)
-            database_handler.add_live_log("IA PENSANDO", f"Contexto da BUSCA retornado para a IA.")
             prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final.", context]
             response = chat.send_message(prompt_parts, safety_settings=safety_settings)
 
         elif initial_text.startswith("[READ_URL]") and initial_text.endswith("[/READ_URL]"):
             url = initial_text.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
             context = read_url_content(url)
-            database_handler.add_live_log("IA PENSANDO", f"Contexto da LEITURA DE URL retornado para a IA.")
             prompt_parts = ["Você recebeu o conteúdo da página web. Com base neste texto, formule sua resposta final.", context]
             response = chat.send_message(prompt_parts, safety_settings=safety_settings)
             
