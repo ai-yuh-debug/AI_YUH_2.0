@@ -43,7 +43,18 @@ def force_consolidate_daily():
     if BOT_STATE == 'ASLEEP':
         database_handler.add_live_log("ERRO", "O bot precisa estar AWAKE para forçar sumarização.")
         return
-    consolidate_daily_memories(force=True)
+    memories_to_consolidate = database_handler.get_memories_for_consolidation("transfer")
+    if not memories_to_consolidate:
+        database_handler.add_live_log("STATUS", "Nenhuma memória 'transfer' encontrada para forçar sumarização.")
+        return
+    database_handler.add_live_log("SUMARIZAÇÃO GLOBAL", f"Forçando sumarização diária de {len(memories_to_consolidate)} memórias 'transfer'.")
+    full_text = "\n\n".join([mem['summary'] for mem in memories_to_consolidate if mem.get('summary')])
+    daily_summary = gemini_handler.summarize_global_chat(f"Resuma os seguintes eventos (sumarização forçada):\n{full_text}", "diário (forçado)")
+    metadata = {"date": datetime.now(TIMEZONE).isoformat(), "forced": True}
+    database_handler.save_hierarchical_memory("daily", daily_summary, metadata)
+    ids_to_delete = [mem['id'] for mem in memories_to_consolidate]
+    database_handler.delete_memories_by_ids(ids_to_delete)
+    database_handler.add_live_log("MEMÓRIA GLOBAL", "Sumarização diária forçada concluída.")
 
 def force_consolidate_weekly():
     if BOT_STATE == 'ASLEEP': return
@@ -404,7 +415,7 @@ def main():
         time.sleep(2)
         BOT_STATE = 'ASLEEP'
         database_handler.update_bot_status(f"Online ({BOT_STATE})")
-        send_chat_message(sock, f"AI_Yuh (v4.0.5-stable) em modo de espera.")
+        send_chat_message(sock, f"AI_Yuh (v4.0.5-force-fix) em modo de espera.")
         listen_for_messages(sock)
     except Exception as e:
         database_handler.add_live_log("ERRO", f"Erro fatal na conexão: {e}")
