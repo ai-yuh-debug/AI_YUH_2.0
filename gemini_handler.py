@@ -30,7 +30,6 @@ def load_models_from_settings(settings: dict):
     try:
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
-        
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
         summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")
@@ -127,18 +126,22 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
         initial_text = response.text.strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{initial_text}'")
         
+        final_response_obj = response # Começa com a resposta inicial
+
         if initial_text.startswith("[SEARCH]") and initial_text.endswith("[/SEARCH]"):
             query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
             context = web_search_ddgs(query)
+            database_handler.add_live_log("IA PENSANDO", f"Contexto da BUSCA retornado para a IA.")
             prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final.", context]
-            response = chat.send_message(prompt_parts, safety_settings=safety_settings)
-            final_text = response.text
+            final_response_obj = chat.send_message(prompt_parts, safety_settings=safety_settings)
+
         elif initial_text.startswith("[READ_URL]") and initial_text.endswith("[/READ_URL]"):
             url = initial_text.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
             context = read_url_content(url)
+            database_handler.add_live_log("IA PENSANDO", f"Contexto da LEITURA DE URL retornado para a IA.")
             prompt_parts = ["Você recebeu o conteúdo da página web. Com base neste texto, formule sua resposta final.", context]
-            response = chat.send_message(prompt_parts, safety_settings=safety_settings)
-            final_text = response.text
+            final_response_obj = chat.send_message(prompt_parts, safety_settings=safety_settings)
+            
         elif initial_text.startswith("[CREATE_REMINDER]") and initial_text.endswith("[/CREATE_REMINDER]"):
             params_str = initial_text.split("[CREATE_REMINDER]")[1].split("[/CREATE_REMINDER]")[0]
             params = [p.strip() for p in params_str.split(';')]
@@ -156,16 +159,15 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
                     content=content, target_user=target_user
                 )
                 if success:
-                    final_text = f"Entendido! Criei um lembrete para '{content}' para você."
+                    return f"Entendido! Criei um lembrete para '{content}'."
                 else:
-                    final_text = "Não consegui criar o lembrete, ocorreu um erro ao salvar."
+                    return "Não consegui criar o lembrete, ocorreu um erro ao salvar."
             except IndexError:
-                final_text = "Não consegui entender todos os parâmetros para criar o lembrete. Por favor, tente ser mais específico sobre o gatilho (ex: 'a cada 30 minutos' ou 'quando a live começar')."
-        else:
-            final_text = initial_text
-            
-        if not final_text: return "Minha resposta foi bloqueada por segurança."
-        final_text = final_text.replace('*', '').replace('`', '').strip()
+                return "Não consegui entender todos os parâmetros para criar o lembrete. Por favor, tente ser mais específico sobre o gatilho (ex: 'a cada 30 minutos' ou 'quando a live começar')."
+
+        if not final_response_obj.parts: return "Minha resposta foi bloqueada por segurança."
+        
+        final_text = final_response_obj.text.replace('*', '').replace('`', '').strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta final para o usuário: '{final_text}'")
         return final_text
         
