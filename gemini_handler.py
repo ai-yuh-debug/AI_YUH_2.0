@@ -30,6 +30,7 @@ def load_models_from_settings(settings: dict):
     try:
         interaction_model_name = settings.get('interaction_model', 'gemini-1.5-flash-latest')
         archivist_model_name = settings.get('archivist_model', 'gemini-1.5-flash-latest')
+        
         interaction_model = genai.GenerativeModel(model_name=interaction_model_name)
         summarizer_model = genai.GenerativeModel(model_name=archivist_model_name)
         print(f"Modelo de interação '{interaction_model_name}' carregado.")
@@ -89,17 +90,15 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
     personality_prompt = settings.get('personality_prompt', '')
     
     system_prompt = (
-        f"**FATO DO SISTEMA:** A data e hora exatas agora são {current_time}. O usuário que está falando com você é '{user_info}', que tem o nível de permissão '{user_permission}'.\n\n"
-        f"**REGRA DE NOMES DE USUÁRIO:** Nomes de usuário não diferenciam maiúsculas de minúsculas. 'Spiq' é a mesma pessoa que 'spiq'.\n\n"
+        f"**FATO DO SISTEMA:** A data e hora exatas agora são {current_time}. O usuário que está falando com você é '{user_info}', com permissão '{user_permission}'.\n\n"
+        f"**REGRA DE NOMES:** Nomes de usuário não diferenciam maiúsculas/minúsculas. 'Spiq' é a mesma pessoa que 'spiq'.\n\n"
         f"{personality_prompt}"
     )
-    
     search_instructions = (
-        "\n\n**REGRAS CRÍTICAS DE FERRAMENTAS (PLACEHOLDERS DE TEXTO):**\n"
-        "1. **Para buscas:** Se precisar de informações externas, responda APENAS com `[SEARCH]termo de busca[/SEARCH]`.\n"
-        "2. **Para ler URLs:** Se o usuário fornecer uma URL, responda APENAS com `[READ_URL]url[/READ_URL]`.\n"
-        "3. **Para criar lembretes:** Se um usuário 'master' pedir para criar um lembrete, interprete o pedido e responda APENAS com o placeholder `[CREATE_REMINDER]content; trigger_type; trigger_value; target_user[/CREATE_REMINDER]`. Separe os parâmetros com ';'. Gatilhos válidos: 'live_on', 'interval'. Valores de intervalo: '5m', '1h', etc. Se o usuário alvo não for especificado, use o nome de quem pediu.\n"
-        "**NÃO tente responder de outra forma. Sua resposta DEVE ser apenas o placeholder.**"
+        "\n\n**REGRAS DE FERRAMENTAS:**\n"
+        "1. **BUSCA:** Se precisar de informações externas, responda APENAS com `[SEARCH]termo[/SEARCH]`.\n"
+        "2. **LEITURA DE URL:** Se o usuário der uma URL, responda APENAS com `[READ_URL]url[/READ_URL]`.\n"
+        "3. **LEMBRETES (Apenas para 'master'):** Se o usuário for 'master' e pedir um lembrete, responda APENAS com `[CREATE_REMINDER]content;trigger_type;trigger_value;target_user[/CREATE_REMINDER]`."
     )
     full_history.append({'role': 'user', 'parts': [system_prompt + search_instructions]})
     full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS."]})
@@ -126,48 +125,41 @@ def generate_interactive_response(question: str, history: list, settings: dict, 
         initial_text = response.text.strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{initial_text}'")
         
-        final_response_obj = response # Começa com a resposta inicial
-
-        if initial_text.startswith("[SEARCH]") and initial_text.endswith("[/SEARCH]"):
-            query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
-            context = web_search_ddgs(query)
-            database_handler.add_live_log("IA PENSANDO", f"Contexto da BUSCA retornado para a IA.")
-            prompt_parts = ["Com base nos resultados da pesquisa a seguir, formule sua resposta final.", context]
-            final_response_obj = chat.send_message(prompt_parts, safety_settings=safety_settings)
-
-        elif initial_text.startswith("[READ_URL]") and initial_text.endswith("[/READ_URL]"):
-            url = initial_text.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
-            context = read_url_content(url)
-            database_handler.add_live_log("IA PENSANDO", f"Contexto da LEITURA DE URL retornado para a IA.")
-            prompt_parts = ["Você recebeu o conteúdo da página web. Com base neste texto, formule sua resposta final.", context]
-            final_response_obj = chat.send_message(prompt_parts, safety_settings=safety_settings)
+        # Loop para lidar com chamadas de ferramentas
+        max_loops = 2
+        for i in range(max_loops):
+            if initial_text.startswith("[SEARCH]"):
+                query = initial_text.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
+                context = web_search_ddgs(query)
+                prompt_parts = [f"**Sua busca por '{query}' retornou o seguinte:**\n{context}\n\n**Instrução:** Agora, use essa informação para elaborar um comentário ou resumo útil e conversacional para o usuário. Não apenas copie e cole, interprete os resultados."]
+                response = chat.send_message(prompt_parts, safety_settings=safety_settings)
+                initial_text = response.text.strip()
+                database_handler.add_live_log("IA PENSANDO", f"Resposta da IA após busca: '{initial_text}'")
             
-        elif initial_text.startswith("[CREATE_REMINDER]") and initial_text.endswith("[/CREATE_REMINDER]"):
-            params_str = initial_text.split("[CREATE_REMINDER]")[1].split("[/CREATE_REMINDER]")[0]
-            params = [p.strip() for p in params_str.split(';')]
-            
-            try:
-                content = params[0]
-                trigger_type = params[1]
-                trigger_value = params[2] if len(params) > 2 else None
-                target_user = params[3] if len(params) > 3 else user_info
-                
-                database_handler.add_live_log("IA PENSANDO", f"IA extraiu lembrete: content='{content}', trigger='{trigger_type}:{trigger_value}', target='{target_user}'")
-                success = database_handler.save_reminder(
-                    created_by=user_info, channel_name=os.getenv('TTV_CHANNEL'),
-                    trigger_type=trigger_type, trigger_value=trigger_value,
-                    content=content, target_user=target_user
-                )
-                if success:
+            elif initial_text.startswith("[READ_URL]"):
+                url = initial_text.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
+                context = read_url_content(url)
+                prompt_parts = [f"**Você leu o conteúdo da URL. O texto é o seguinte:**\n{context}\n\n**Instrução:** Agora, com base nesse texto, formule sua resposta para o usuário. Resuma os pontos principais ou comente sobre o conteúdo de forma inteligente."]
+                response = chat.send_message(prompt_parts, safety_settings=safety_settings)
+                initial_text = response.text.strip()
+                database_handler.add_live_log("IA PENSANDO", f"Resposta da IA após leitura de URL: '{initial_text}'")
+
+            elif initial_text.startswith("[CREATE_REMINDER]"):
+                params_str = initial_text.split("[CREATE_REMINDER]")[1].split("[/CREATE_REMINDER]")[0]
+                params = [p.strip() for p in params_str.split(';')]
+                try:
+                    content, trigger_type, trigger_value, target_user = params
+                    database_handler.save_reminder(created_by=user_info, channel_name=os.getenv('TTV_CHANNEL'),
+                                                   trigger_type=trigger_type, trigger_value=trigger_value,
+                                                   content=content, target_user=target_user)
                     return f"Entendido! Criei um lembrete para '{content}'."
-                else:
-                    return "Não consegui criar o lembrete, ocorreu um erro ao salvar."
-            except IndexError:
-                return "Não consegui entender todos os parâmetros para criar o lembrete. Por favor, tente ser mais específico sobre o gatilho (ex: 'a cada 30 minutos' ou 'quando a live começar')."
+                except Exception as e:
+                    return f"Não consegui criar o lembrete. Erro nos parâmetros: {e}"
+            else:
+                # Se não for uma ferramenta, saia do loop
+                break
 
-        if not final_response_obj.parts: return "Minha resposta foi bloqueada por segurança."
-        
-        final_text = final_response_obj.text.replace('*', '').replace('`', '').strip()
+        final_text = initial_text.replace('*', '').replace('`', '').strip()
         database_handler.add_live_log("IA PENSANDO", f"Resposta final para o usuário: '{final_text}'")
         return final_text
         
