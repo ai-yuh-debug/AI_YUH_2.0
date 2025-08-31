@@ -6,6 +6,7 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import database_handler
 import requests
 from bs4 import BeautifulSoup
+import re
 
 GEMINI_ENABLED = False
 interaction_model = None
@@ -38,7 +39,7 @@ def load_models_from_settings(settings: dict):
     except Exception as e:
         print(f"ERRO ao carregar modelos de IA: {e}"); global GEMINI_ENABLED; GEMINI_ENABLED = False
 
-def web_search_ddgs(query: str, num_results: int = 5) -> str:
+def web_search_ddgs(query: str, num_results: int = 3) -> str:
     database_handler.add_live_log("IA PENSANDO", f"Executando busca DDGS por: '{query}'")
     try:
         news_results = DDGS().news(query, max_results=num_results)
@@ -76,92 +77,93 @@ def read_url_content(url: str) -> str:
 
         return f"Conteúdo da página '{url}':\n\n{text[:4000]}"
 
-    except requests.RequestException as e:
+    except Exception as e:
         print(f"Erro ao acessar a URL {url}: {e}")
         return f"Erro: Não foi possível acessar a URL. O site pode estar bloqueado ou fora do ar. Erro: {e}"
-    except Exception as e:
-        print(f"Erro ao processar a URL {url}: {e}")
-        return "Erro: Não foi possível processar o conteúdo da página."
 
 def generate_interactive_response(question: str, history: list, settings: dict, lorebook: list, long_term_memories: list, hierarchical_memories: list, user_info: str, user_permission: str, current_time: str) -> str:
     if not GEMINI_ENABLED or not interaction_model: return "Erro: Modelo de interação indisponível."
     
-    full_history = []
+    # 1. Montagem do prompt inicial
+    prompt_parts = []
     personality_prompt = settings.get('personality_prompt', '')
     
     system_prompt = (
         f"**FATO DO SISTEMA:** A data e hora exatas agora são {current_time}. O usuário que está falando com você é '{user_info}', com permissão '{user_permission}'.\n\n"
-        f"**REGRA DE NOMES:** Nomes de usuário não diferenciam maiúsculas/minúsculas. 'Spiq' é a mesma pessoa que 'spiq'.\n\n"
+        f"**REGRA DE NOMES:** Nomes de usuário não diferenciam maiúsculas/minúsculas. 'Spiq' é o mesmo que 'spiq'.\n\n"
         f"{personality_prompt}"
     )
     search_instructions = (
-        "\n\n**REGRAS DE FERRAMENTAS:**\n"
-        "1. **BUSCA:** Se precisar de informações externas, responda APENAS com `[SEARCH]termo[/SEARCH]`.\n"
-        "2. **LEITURA DE URL:** Se o usuário der uma URL, responda APENAS com `[READ_URL]url[/READ_URL]`.\n"
-        "3. **LEMBRETES (Apenas para 'master'):** Se um usuário 'master' pedir um lembrete, responda APENAS com `[CREATE_REMINDER]content;trigger_type;trigger_value;target_user[/CREATE_REMINDER]`."
+        "\n\n**REGRAS DE FERRAMENTAS (PRIORIDADE MÁXIMA):**\n"
+        "Sua primeira tarefa é SEMPRE avaliar a pergunta. Se a pergunta exigir QUALQUER informação que não esteja na sua memória, sua resposta DEVE SER APENAS o placeholder da ferramenta apropriada. Ignore sua personalidade nesta primeira resposta.\n"
+        "1. **BUSCA:** `[SEARCH]termo[/SEARCH]`\n"
+        "2. **LEITURA DE URL:** `[READ_URL]url[/READ_URL]`\n"
+        "3. **LEMBRETES (Apenas 'master'):** `[CREATE_REMINDER]content;trigger_type;trigger_value;target_user[/CREATE_REMINDER]`"
     )
-    full_history.append({'role': 'user', 'parts': [system_prompt + search_instructions]})
-    full_history.append({'role': 'model', 'parts': ["REGRAS COMPREENDIDAS."]})
+    prompt_parts.append(system_prompt + search_instructions)
     
     if lorebook:
         lorebook_text = "\n".join(f"- {fact}" for fact in lorebook)
-        full_history.append({'role': 'user', 'parts': [f"{settings.get('lorebook_prompt', '')}\n{lorebook_text}"]})
-        full_history.append({'role': 'model', 'parts': ["Lorebook assimilado."]})
+        prompt_parts.append(f"\n--- LOREBOOK ---\n{lorebook_text}")
     if long_term_memories:
         memories_text = "\n".join(f"- {mem}" for mem in long_term_memories)
-        full_history.append({'role': 'user', 'parts': [f"Resumos de conversas passadas com este usuário:\n{memories_text}"]})
-        full_history.append({'role': 'model', 'parts': ["Memórias do usuário assimiladas."]})
+        prompt_parts.append(f"\n--- MEMÓRIAS COM '{user_info}' ---\n{memories_text}")
     if hierarchical_memories:
         hier_mem_text = "\n".join([f"- {mem['summary']}" for mem in hierarchical_memories if mem.get('summary')])
-        full_history.append({'role': 'user', 'parts': [f"Resumos de eventos recentes no chat:\n{hier_mem_text}"]})
-        full_history.append({'role': 'model', 'parts': ["Memórias do chat assimiladas."]})
+        prompt_parts.append(f"\n--- MEMÓRIAS GLOBAIS RECENTES ---\n{hier_mem_text}")
         
-    full_history.extend(history)
-    chat = interaction_model.start_chat(history=full_history)
+    prompt_parts.append("\n--- CONVERSA ATUAL ---")
+    for item in history:
+        role = "Usuário" if item['role'] == 'user' else "Você"
+        prompt_parts.append(f"{role}: {item['parts'][0]}")
     
-    try:
-        database_handler.add_live_log("IA PENSANDO", f"Pergunta para IA de '{user_info}': '{question}'")
-        response = chat.send_message(question, safety_settings=safety_settings)
+    # 2. Loop de Ferramentas
+    max_loops = 3
+    current_question = f"Usuário '{user_info}': {question}"
+    
+    for i in range(max_loops):
+        final_prompt = "\n".join(prompt_parts + [current_question, "\nSua resposta:"])
+        database_handler.add_live_log("IA PENSANDO", f"Enviando prompt para IA (Iteração {i+1}).")
         
-        max_loops = 2
-        for i in range(max_loops):
+        try:
+            response = interaction_model.generate_content(final_prompt, safety_settings=safety_settings)
             text_response = response.text.strip()
-            database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA (Loop {i+1}): '{text_response}'")
+            database_handler.add_live_log("IA PENSANDO", f"Resposta bruta da IA: '{text_response}'")
 
-            tool_called = False
             if text_response.startswith("[SEARCH]") and text_response.endswith("[/SEARCH]"):
-                tool_called = True
                 query = text_response.split("[SEARCH]")[1].split("[/SEARCH]")[0].strip()
                 context = web_search_ddgs(query)
-                prompt_parts = [f"**Contexto da sua busca por '{query}':**\n{context}\n\n**Instrução:** Agora, use esse contexto para elaborar uma resposta conversacional para a pergunta original do usuário: '{question}'."]
-                response = chat.send_message(prompt_parts, safety_settings=safety_settings)
+                current_question = f"**Contexto da Busca (Ferramenta):**\n{context}\n\n**Instrução:** Use o contexto acima para responder a pergunta original do usuário: '{question}'"
+                continue # Volta para o início do loop com o novo prompt
             
             elif text_response.startswith("[READ_URL]") and text_response.endswith("[/READ_URL]"):
-                tool_called = True
                 url = text_response.split("[READ_URL]")[1].split("[/READ_URL]")[0].strip()
                 context = read_url_content(url)
-                prompt_parts = [f"**Conteúdo da URL '{url}':**\n{context}\n\n**Instrução:** Agora, com base nesse texto, responda à pergunta original do usuário: '{question}'."]
-                response = chat.send_message(prompt_parts, safety_settings=safety_settings)
+                current_question = f"**Conteúdo da URL (Ferramenta):**\n{context}\n\n**Instrução:** Use o conteúdo acima para responder a pergunta original do usuário: '{question}'"
+                continue
 
             elif text_response.startswith("[CREATE_REMINDER]") and text_response.endswith("[/CREATE_REMINDER]"):
-                # A criação de lembrete é uma ação final, não precisa de mais um ciclo.
-                # ... (lógica de lembretes) ...
-                return "Lembrete criado com sucesso!"
+                params_str = text_response.split("[CREATE_REMINDER]")[1].split("[/CREATE_REMINDER]")[0]
+                params = [p.strip() for p in params_str.split(';')]
+                try:
+                    content, trigger_type, trigger_value, target_user = params[0], params[1], params[2], params[3]
+                    success = database_handler.save_reminder(created_by=user_info, channel_name=os.getenv('TTV_CHANNEL'),
+                                                           trigger_type=trigger_type, trigger_value=trigger_value,
+                                                           content=content, target_user=target_user)
+                    if success:
+                        return f"Entendido! Criei um lembrete para '{content}'."
+                    else:
+                        return "Não consegui criar o lembrete, ocorreu um erro ao salvar."
+                except IndexError:
+                    return "Não consegui entender todos os parâmetros para criar o lembrete."
+            else:
+                return text_response.replace('*', '').replace('`', '').strip()
 
-            if not tool_called:
-                # Se nenhuma ferramenta foi chamada, esta é a resposta final.
-                final_text = text_response.replace('*', '').replace('`', '').strip()
-                database_handler.add_live_log("IA PENSANDO", f"Resposta final para o usuário: '{final_text}'")
-                return final_text
-        
-        # Se o loop terminar sem uma resposta final, retorna a última resposta da IA.
-        final_text_after_loop = response.text.strip().replace('*', '').replace('`', '')
-        database_handler.add_live_log("IA PENSANDO", f"Resposta final para o usuário (pós-loop): '{final_text_after_loop}'")
-        return final_text_after_loop
+        except Exception as e:
+            print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
 
-    except Exception as e:
-        print(f"Erro na geração de resposta: {e}"); return "Ocorreu um erro ao pensar."
-        
+    return "Puxa, entrei em um loop de ferramentas. Pode reformular a pergunta?"
+
 def summarize_conversation(conversation_history):
     if not GEMINI_ENABLED or not summarizer_model: return "Erro: Sumarização indisponível."
     try:
